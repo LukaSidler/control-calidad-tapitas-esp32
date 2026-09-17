@@ -1,0 +1,42 @@
+# ==========================================================================
+# ESP-IDF build output
+# ==========================================================================
+build/
+
+# Generated per-target config. sdkconfig.defaults IS committed (it seeds these);
+# sdkconfig itself is machine/target-generated and should not be.
+sdkconfig
+sdkconfig.old
+
+# IDF Component Manager: downloaded dependencies and the resolved lock file.
+managed_components/
+dependencies.lock
+
+# ==========================================================================
+# Editor / IDE
+# ==========================================================================
+.vscode/
+.idea/
+*.swp
+*~
+
+# ==========================================================================
+# OS cruft
+# ==========================================================================
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ==========================================================================
+# Python (scripts de entrenamiento)
+# ==========================================================================
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# ==========================================================================
+# Dataset crudo (vive fuera del repo, en dataset_tapitas/)
+# ==========================================================================
+dataset/sana/
+dataset/rota/

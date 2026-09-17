@@ -1,0 +1,59 @@
+test set: (44, 128, 128, 1) sana(0)/rota(1): 21 23
+
+  thr    acc   prec    rec     f1  tp tn fp fn   fn_files
+------------------------------------------------------------------------------------------
+ 0.50  86.4% 100.0%  73.9%  0.850  17 21  0  6   FN=['rota_0016.jpg', 'rota_0032.jpg', 'rota_0141.jpg', 'rota_0150.jpg', 'rota_0156.jpg', 'rota_0163.jpg'] FP=[]
+ 0.45  86.4% 100.0%  73.9%  0.850  17 21  0  6   FN=['rota_0016.jpg', 'rota_0032.jpg', 'rota_0141.jpg', 'rota_0150.jpg', 'rota_0156.jpg', 'rota_0163.jpg'] FP=[]
+ 0.40  86.4% 100.0%  73.9%  0.850  17 21  0  6   FN=['rota_0016.jpg', 'rota_0032.jpg', 'rota_0141.jpg', 'rota_0150.jpg', 'rota_0156.jpg', 'rota_0163.jpg'] FP=[]
+ 0.35  86.4% 100.0%  73.9%  0.850  17 21  0  6   FN=['rota_0016.jpg', 'rota_0032.jpg', 'rota_0141.jpg', 'rota_0150.jpg', 'rota_0156.jpg', 'rota_0163.jpg'] FP=[]
+ 0.30  86.4% 100.0%  73.9%  0.850  17 21  0  6   FN=['rota_0016.jpg', 'rota_0032.jpg', 'rota_0141.jpg', 'rota_0150.jpg', 'rota_0156.jpg', 'rota_0163.jpg'] FP=[]
+ 0.25  90.9% 100.0%  82.6%  0.905  19 21  0  4   FN=['rota_0016.jpg', 'rota_0141.jpg', 'rota_0156.jpg', 'rota_0163.jpg'] FP=[]
+ 0.20  90.9%  88.0%  95.7%  0.917  22 18  3  1   FN=['rota_0016.jpg'] FP=['sana_0116.jpg', 'sana_0134.jpg', 'sana_0136.jpg']
+ 0.15  56.8%  55.0%  95.7%  0.698  22  3 18  1   FN=['rota_0016.jpg'] FP=['sana_0020.jpg', 'sana_0021.jpg', 'sana_0022.jpg', 'sana_0023.jpg', 'sana_0024.jpg', 'sana_0025.jpg', 'sana_0026.jpg', 'sana_0027.jpg', 'sana_0028.jpg', 'sana_0116.jpg', 'sana_0119.jpg', 'sana_0122.jpg', 'sana_0125.jpg', 'sana_0128.jpg', 'sana_0131.jpg', 'sana_0134.jpg', 'sana_0136.jpg', 'sana_0139.jpg']
+ 0.10  56.8%  55.0%  95.7%  0.698  22  3 18  1   FN=['rota_0016.jpg'] FP=['sana_0020.jpg', 'sana_0021.jpg', 'sana_0022.jpg', 'sana_0023.jpg', 'sana_0024.jpg', 'sana_0025.jpg', 'sana_0026.jpg', 'sana_0027.jpg', 'sana_0028.jpg', 'sana_0116.jpg', 'sana_0119.jpg', 'sana_0122.jpg', 'sana_0125.jpg', 'sana_0128.jpg', 'sana_0131.jpg', 'sana_0134.jpg', 'sana_0136.jpg', 'sana_0139.jpg']
+
+Raw probabilities (rota=1 target), sorted:
+  sana_0109.jpg    label=0 prob_rota=0.0156
+  sana_0088.jpg    label=0 prob_rota=0.0195
+  rota_0016.jpg    label=1 prob_rota=0.0391
+  sana_0153.jpg    label=0 prob_rota=0.0664
+  sana_0028.jpg    label=0 prob_rota=0.1523
+  sana_0021.jpg    label=0 prob_rota=0.1523
+  sana_0026.jpg    label=0 prob_rota=0.1523
+  sana_0027.jpg    label=0 prob_rota=0.1523
+  sana_0024.jpg    label=0 prob_rota=0.1523
+  sana_0025.jpg    label=0 prob_rota=0.1680
+  sana_0131.jpg    label=0 prob_rota=0.1680
+  sana_0125.jpg    label=0 prob_rota=0.1680
+  sana_0023.jpg    label=0 prob_rota=0.1680
+  sana_0020.jpg    label=0 prob_rota=0.1680
+  sana_0022.jpg    label=0 prob_rota=0.1680
+  sana_0122.jpg    label=0 prob_rota=0.1875
+  sana_0119.jpg    label=0 prob_rota=0.1875
+  sana_0128.jpg    label=0 prob_rota=0.1875
+  sana_0139.jpg    label=0 prob_rota=0.1875
+  rota_0163.jpg    label=1 prob_rota=0.2109
+  sana_0134.jpg    label=0 prob_rota=0.2344
+  sana_0136.jpg    label=0 prob_rota=0.2344
+  rota_0141.jpg    label=1 prob_rota=0.2344
+  sana_0116.jpg    label=0 prob_rota=0.2344
+  rota_0156.jpg    label=1 prob_rota=0.2344
+  rota_0032.jpg    label=1 prob_rota=0.2578
+  rota_0150.jpg    label=1 prob_rota=0.2812
+  rota_0123.jpg    label=1 prob_rota=0.5312
+  rota_0007.jpg    label=1 prob_rota=0.6289
+  rota_0010.jpg    label=1 prob_rota=0.6875
+  rota_0117.jpg    label=1 prob_rota=0.7422
+  rota_0096.jpg    label=1 prob_rota=0.7891
+  rota_0132.jpg    label=1 prob_rota=0.8633
+  rota_0108.jpg    label=1 prob_rota=0.8633
+  rota_0090.jpg    label=1 prob_rota=0.9883
+  rota_0026.jpg    label=1 prob_rota=0.9961
+  rota_0137.jpg    label=1 prob_rota=0.9961
+  rota_0128.jpg    label=1 prob_rota=0.9961
+  rota_0003.jpg    label=1 prob_rota=0.9961
+  rota_0021.jpg    label=1 prob_rota=0.9961
+  rota_0058.jpg    label=1 prob_rota=0.9961
+  rota_0052.jpg    label=1 prob_rota=0.9961
+  rota_0081.jpg    label=1 prob_rota=0.9961
+  rota_0072.jpg    label=1 prob_rota=0.9961

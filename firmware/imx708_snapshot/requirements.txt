@@ -1,0 +1,5 @@
+# Dependencias de ver_imx708.py -- receptor serial + visor en vivo
+pyserial>=3.5
+numpy>=1.24
+opencv-python>=4.8
+paho-mqtt>=1.6

@@ -22,7 +22,9 @@ control-calidad-tapitas-esp32/
 │   ├── main/                   # Código de la app: captura, HSV, inferencia TinyML, MQTT
 │   ├── CMakeLists.txt
 │   ├── sdkconfig.defaults      # Incluye el fix del bug de esp-nn (ver NOTAS_TINYML.md)
-│   └── NOTAS_TINYML.md         # Detalle de la integración del modelo y el bug de esp-nn
+│   ├── NOTAS_TINYML.md         # Detalle de la integración del modelo y el bug de esp-nn
+│   ├── ver_imx708.py           # Visor en vivo por serial (logs + cámara)
+│   └── requirements.txt        # Deps de ver_imx708.py
 ├── modelo/                     # Entrenamiento, conversión y evaluación del modelo TinyML
 ├── dataset/                    # README + fotos de ejemplo (el dataset completo vive fuera del repo)
 └── raspberry/                  # Ingesta MQTT + base de datos (pendiente)
@@ -36,6 +38,18 @@ Requiere **ESP-IDF v5.4** o superior.
 cd firmware/imx708_snapshot
 idf.py set-target esp32p4
 idf.py build flash monitor
+```
+
+### Monitoreo con visor en vivo (opcional)
+
+`ver_imx708.py` recibe por serial los logs del ESP32 y muestra la cámara en
+vivo (en vez de usar sólo `idf.py monitor`). Requiere las dependencias de
+`requirements.txt`:
+
+```sh
+cd firmware/imx708_snapshot
+pip install -r requirements.txt
+python ver_imx708.py
 ```
 
 ## Modelo TinyML: métricas

@@ -19,11 +19,12 @@ Regional Villa María. Entrega: 12 de noviembre de 2026.
 ```
 control-calidad-tapitas-esp32/
 ├── firmware/imx708_snapshot/   # Firmware ESP-IDF (basado en el ejemplo imx708_snapshot)
-│   ├── main/                   # Código de la app: captura, HSV, inferencia TinyML, MQTT
+│   ├── main/                   # Código de la app: captura, HSV, inferencia TinyML, puente serial
 │   ├── CMakeLists.txt
 │   ├── sdkconfig.defaults      # Incluye el fix del bug de esp-nn (ver NOTAS_TINYML.md)
 │   ├── NOTAS_TINYML.md         # Detalle de la integración del modelo y el bug de esp-nn
-│   ├── ver_imx708.py           # Visor en vivo por serial (logs + cámara)
+│   ├── NOTAS_WIFI_HOSTED.md    # Bug de WiFi ESP32-P4+C6 (esp-hosted-mcu) y por qué no se usa
+│   ├── ver_imx708.py           # Visor en vivo por serial (logs + cámara) + puente a MQTT
 │   └── requirements.txt        # Deps de ver_imx708.py
 ├── modelo/                     # Entrenamiento, conversión y evaluación del modelo TinyML
 ├── dataset/                    # README + fotos de ejemplo (el dataset completo vive fuera del repo)
@@ -71,8 +72,10 @@ poco más de falsos positivos (88% de precisión). Detalle completo en
 [`modelo/threshold_results.txt`](modelo/threshold_results.txt) y
 [`modelo/README.md`](modelo/README.md).
 
-El firmware manda `prob_rota` crudo (sin umbralizar) por MQTT, para poder
-ajustar este umbral del lado de la Raspberry Pi sin reflashear el ESP32.
+El firmware manda `prob_rota` crudo (sin umbralizar) por el puente serial
+hacia la PC (ver más abajo por qué no se manda por MQTT/WiFi directo desde
+el ESP32), para poder ajustar este umbral del lado de la Raspberry Pi sin
+reflashear el ESP32.
 
 ## Bug de esp-nn en ESP32-P4
 
@@ -83,6 +86,24 @@ vía `sdkconfig.defaults` — ya está commiteado en este repo, así que
 cualquiera que clone y compile desde cero no debería pisar el bug. Detalle
 completo del diagnóstico en
 [`firmware/imx708_snapshot/NOTAS_TINYML.md`](firmware/imx708_snapshot/NOTAS_TINYML.md).
+
+## WiFi ESP32-P4 + ESP32-C6 (esp-hosted-mcu): problema conocido, sin resolver
+
+El Waveshare ESP32-P4-WIFI6 usa un ESP32-C6 como coprocesador de WiFi
+conectado por SDIO (`esp-hosted-mcu`). Con WiFi asociado y cualquier otra
+tarea activa haciendo bit-banging de GPIO (en este proyecto, el control
+del motor paso a paso de la cinta), el enlace SDIO se cuelga de forma muy
+reproducible con `Unrecoverable host sdio state` — un bug abierto y sin
+fix confirmado en
+[`espressif/esp-hosted-mcu#167`](https://github.com/espressif/esp-hosted-mcu/issues/167),
+donde documentamos el diagnóstico en detalle.
+
+**Por eso este proyecto no usa WiFi/MQTT directo desde el ESP32**: la
+clasificación viaja por el mismo cable serial que las imágenes hasta una
+PC (`ver_imx708.py`), que es quien publica por MQTT hacia la Raspberry Pi.
+Si se quiere usar WiFi directo desde el ESP32 en el futuro, revisar
+primero el estado de ese issue. Detalle completo en
+[`firmware/imx708_snapshot/NOTAS_WIFI_HOSTED.md`](firmware/imx708_snapshot/NOTAS_WIFI_HOSTED.md).
 
 ## Estado actual
 

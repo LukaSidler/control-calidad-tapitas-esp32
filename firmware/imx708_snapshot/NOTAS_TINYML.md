@@ -6,7 +6,10 @@
 offline sobre fotos de tapitas, ver `dataset_tapitas/modelo/`) directamente
 en el ESP32-P4 usando TFLite Micro (`esp-tflite-micro`), sobre cada frame
 capturado por la IMX708. La salida es `prob_rota`: probabilidad (0.0–1.0) de
-que la tapita esté rota, que se manda por MQTT junto con el color HSV.
+que la tapita esté rota, que se manda junto con el color HSV por el
+puente serial hacia MQTT (ver
+[`NOTAS_WIFI_HOSTED.md`](NOTAS_WIFI_HOSTED.md) — el ESP32 no usa WiFi/MQTT
+directo por un bug conocido de `esp-hosted-mcu`).
 
 Preprocesamiento (recorte 1120×1120 centrado, resize a 128×128, escala de
 grises, cuantización a int8) reproduce **exactamente** el pipeline de
@@ -80,6 +83,7 @@ negativo (tapita rota que pasa como sana) es peor que un falso positivo.
 Con el modelo funcionando bien on-device, esta recomendación offline sigue
 siendo válida (no dependía de la inferencia en el ESP32).
 
-El firmware manda `prob_rota` crudo por MQTT (no un booleano ya decidido),
-para poder ajustar el umbral desde el lado de ingesta (Raspberry Pi,
-`tapitas_ingest.py`) sin tener que reflashear el ESP32.
+El firmware manda `prob_rota` crudo (no un booleano ya decidido) por el
+puente serial hacia MQTT, para poder ajustar el umbral desde el lado de
+ingesta (Raspberry Pi, `tapitas_ingest.py`) sin tener que reflashear el
+ESP32.

@@ -2,8 +2,11 @@
 
 Pendiente.
 
-El ESP32 manda `prob_rota` (float crudo 0–1) por MQTT. Acá va a vivir
-`tapitas_ingest.py`, que va a:
+El ESP32 manda `prob_rota` (float crudo 0–1) por el puente serial hacia
+una PC (`ver_imx708.py`), que es quien lo publica por MQTT — el ESP32 no
+usa WiFi/MQTT directo por un bug conocido de `esp-hosted-mcu` (ver
+[`NOTAS_WIFI_HOSTED.md`](../firmware/imx708_snapshot/NOTAS_WIFI_HOSTED.md)
+en el README principal). Acá va a vivir `tapitas_ingest.py`, que va a:
 
 - Suscribirse al tópico MQTT donde el ESP32 publica cada clasificación
   (color HSV + `prob_rota`).

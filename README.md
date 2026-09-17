@@ -20,6 +20,7 @@ Regional Villa María. Entrega: 12 de noviembre de 2026.
 control-calidad-tapitas-esp32/
 ├── firmware/imx708_snapshot/   # Firmware ESP-IDF (basado en el ejemplo imx708_snapshot)
 │   ├── main/                   # Código de la app: captura, HSV, inferencia TinyML, puente serial
+│   ├── components/imx_serial_img/  # Componente local: envío de imágenes por UART
 │   ├── CMakeLists.txt
 │   ├── sdkconfig.defaults      # Incluye el fix del bug de esp-nn (ver NOTAS_TINYML.md)
 │   ├── NOTAS_TINYML.md         # Detalle de la integración del modelo y el bug de esp-nn

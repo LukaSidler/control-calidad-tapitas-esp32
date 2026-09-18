@@ -15,4 +15,4 @@ en el README principal). Acá va a vivir `tapitas_ingest.py`, que va a:
   convertir `prob_rota` en sana/rota.
 - Cargar cada resultado a una base de datos.
 
-Broker MQTT: Raspberry Pi 3B+ en `192.168.1.100`.
+Broker MQTT: Raspberry Pi 3B+ en la IP local de la Raspberry (configurable vía `TAPITAS_MQTT_HOST` en `ver_imx708.py`).

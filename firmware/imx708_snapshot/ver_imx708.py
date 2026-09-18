@@ -59,7 +59,7 @@ WINDOW_NAME = "IMX708 - vista en vivo"
 # Puente hacia la Raspberry: el ESP32 ya no toca WiFi (bug de esp-hosted-mcu
 # que reiniciaba la placa). Esta PC recibe la clasificacion por el cable
 # serial de siempre y la republica por MQTT, sin pasar por el C6 para nada.
-MQTT_BROKER_HOST = "192.168.1.100"
+MQTT_BROKER_HOST = os.environ.get("TAPITAS_MQTT_HOST", "192.168.1.100")
 MQTT_BROKER_PORT = 1883
 MQTT_TOPIC_CLASIFICACION = "tapitas/clasificacion"
 

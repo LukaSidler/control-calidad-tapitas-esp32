@@ -3,7 +3,9 @@ import numpy as np
 import cv2
 import tflite_runtime.interpreter as tflite
 
-BASE = 'REDACTED_LOCAL_PATH'
+# Directorio local de trabajo (no versionado): ajustar a gusto o setear
+# la variable de entorno TAPITAS_DATASET.
+BASE = os.environ.get('TAPITAS_DATASET', os.path.join(os.path.dirname(__file__), '..', 'dataset_tapitas'))
 MODELO = os.path.join(BASE, 'modelo')
 CROP_SIZE = 1120
 IMG_SIZE = 128

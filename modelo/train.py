@@ -3,8 +3,10 @@ import numpy as np
 import cv2
 import tensorflow as tf
 
-SCRATCH = 'REDACTED_SCRATCH_PATH'
-BASE = 'REDACTED_LOCAL_PATH'
+# Directorios locales de trabajo (no versionados): ajustar a gusto o setear
+# las variables de entorno TAPITAS_SCRATCH / TAPITAS_DATASET.
+SCRATCH = os.environ.get('TAPITAS_SCRATCH', os.path.join(os.path.dirname(__file__), 'scratch'))
+BASE = os.environ.get('TAPITAS_DATASET', os.path.join(os.path.dirname(__file__), '..', 'dataset_tapitas'))
 CROP_SIZE = 1120
 JITTER = 70
 IMG_SIZE = 128

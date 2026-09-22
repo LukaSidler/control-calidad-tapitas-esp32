@@ -16,8 +16,9 @@ CONFIG_SPIRAM_SPEED_200M=y
 CONFIG_CACHE_L2_CACHE_256KB=y
 CONFIG_CACHE_L2_CACHE_LINE_128B=y
 
-# 32 MB flash on this board
-CONFIG_ESPTOOLPY_FLASHSIZE_32MB=y
+# 16 MB flash on this board (esptool detecta 16MB reales; el datasheet del
+# Waveshare dice 32MB pero el chip flasheado es de 16MB)
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 
 # esp_video: MIPI-CSI capture + ISP
 CONFIG_ESP_VIDEO_ENABLE_MIPI_CSI_VIDEO_DEVICE=y

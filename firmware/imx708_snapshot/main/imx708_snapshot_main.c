@@ -1036,10 +1036,33 @@ static void print_current_wb(void)
 
 /* ---------- Clasificacion de color (misma logica que la OV5647) ---------- */
 
+/* Solo cuentan los pixeles con brillo (max de R/G/B) >= DARK_PIXEL_RATIO del
+ * brillo medio de la ventana. Los agujeros de una tapita rota dejan ver el
+ * fondo oscuro, que tiraba el matiz promedio hacia el rojo (una naranja rota
+ * medio H=13 contra H=22 de una sana, misma luz). */
+#define DARK_PIXEL_RATIO     0.70f
+
 static void sample_average_rgb_region(const uint8_t *frame, uint32_t frame_w,
                                       int x0, int y0, int w, int h,
                                       float *r_out, float *g_out, float *b_out)
 {
+    uint64_t sum_max = 0;
+    uint32_t total = 0;
+
+    for (int y = y0; y < y0 + h; y++) {
+        const uint16_t *row = (const uint16_t *)(frame + (size_t)y * frame_w * 2);
+        for (int x = x0; x < x0 + w; x++) {
+            uint16_t p = row[x];
+            uint32_t r = (((p >> 11) & 0x1F) * 255) / 31;
+            uint32_t g = (((p >> 5) & 0x3F) * 255) / 63;
+            uint32_t b = ((p & 0x1F) * 255) / 31;
+            uint32_t m = r > g ? (r > b ? r : b) : (g > b ? g : b);
+            sum_max += m;
+            total++;
+        }
+    }
+    uint32_t min_max = (uint32_t)(DARK_PIXEL_RATIO * (float)sum_max / total);
+
     uint64_t sum_r = 0, sum_g = 0, sum_b = 0;
     uint32_t count = 0;
 
@@ -1047,16 +1070,19 @@ static void sample_average_rgb_region(const uint8_t *frame, uint32_t frame_w,
         const uint16_t *row = (const uint16_t *)(frame + (size_t)y * frame_w * 2);
         for (int x = x0; x < x0 + w; x++) {
             uint16_t p = row[x];
-            uint8_t r5 = (p >> 11) & 0x1F;
-            uint8_t g6 = (p >> 5) & 0x3F;
-            uint8_t b5 = p & 0x1F;
-            sum_r += (r5 * 255) / 31;
-            sum_g += (g6 * 255) / 63;
-            sum_b += (b5 * 255) / 31;
+            uint32_t r = (((p >> 11) & 0x1F) * 255) / 31;
+            uint32_t g = (((p >> 5) & 0x3F) * 255) / 63;
+            uint32_t b = ((p & 0x1F) * 255) / 31;
+            uint32_t m = r > g ? (r > b ? r : b) : (g > b ? g : b);
+            if (m < min_max) continue;
+            sum_r += r;
+            sum_g += g;
+            sum_b += b;
             count++;
         }
     }
 
+    ESP_LOGI(TAG, "color: %" PRIu32 "/%" PRIu32 " pixeles usados (se descartan los oscuros)", count, total);
     *r_out = (float)sum_r / count;
     *g_out = (float)sum_g / count;
     *b_out = (float)sum_b / count;
@@ -1115,7 +1141,9 @@ static const char *classify_hsv(float h, float s, float v)
      * en "lila" por descarte -- el margen 346-360 es simetrico al que ya
      * existia del otro lado del rojo (h<14), y deja un colchon de sobra
      * respecto del lila calibrado (306.5-308.7). */
-    if (h < 14.0f)  return "rojo";
+    /* Corte rojo/naranja en 7 (antes 14): con la luz del aula las naranjas
+     * bajan a H=9-13, y con la de casa las rojas llegan a H=5. */
+    if (h < 7.0f)   return "rojo";
     if (h < 42.0f)  return "naranja";
     if (h < 150.0f) return "amarillo";
     if (h < 270.0f) return "azul";

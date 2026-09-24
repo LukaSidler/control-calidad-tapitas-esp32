@@ -102,13 +102,17 @@ def es_dudoso(prob_rota: float) -> bool:
 # serial mientras espera la respuesta del modelo.
 OLLAMA_HOST = os.environ.get("TAPITAS_OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("TAPITAS_OLLAMA_MODEL", "llava-phi3")
+# En ingles y como pregunta SI/NO: llava-phi3 (modelo chico) con el prompt
+# anterior en español contestaba "SANA" siempre, aun con agujeros enormes.
+# Probado sobre 45 fotos reales: acierta 14/15 sanas y 10/12 rotas.
 OLLAMA_PROMPT = (
-    "Esta es una foto de una tapita plastica de botella, vista desde adentro, "
-    "para control de calidad. Decime si la tapita esta SANA (intacta, sin "
-    "roturas) o ROTA (con grietas, agujeros o pedazos faltantes). El texto o "
-    "logo grabado en relieve en el plastico NO es una rotura. Respondé "
-    "empezando la primera palabra con SANA o ROTA, y despues una razon breve."
+    "Look at this bottle cap. Printed or embossed letters and logos are "
+    "normal. Is there a burnt hole, puncture or crack in the plastic? "
+    "Answer YES or NO first."
 )
+# Recorte cuadrado centrado que se le manda a Ollama: la tapita ocupa
+# ~750px de alto en el frame de 1920x1080, el resto es fondo que confunde.
+OLLAMA_CROP = 820
 
 os.makedirs(SAVE_DIR, exist_ok=True)
 ser = serial.Serial(PORT, BAUD, timeout=2)
@@ -151,34 +155,44 @@ def _pedir_veredicto_ia(sesion, img_bytes):
     -- si Ollama no esta levantado o tarda, no afecta el puente serial."""
     import urllib.request
 
+    img = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_COLOR)
+    if img is not None:
+        h, w = img.shape[:2]
+        c = min(OLLAMA_CROP, h, w)
+        img = img[(h - c) // 2:(h + c) // 2, (w - c) // 2:(w + c) // 2]
+        img_bytes = cv2.imencode(".jpg", img)[1].tobytes()
+
     b64 = base64.b64encode(img_bytes).decode()
     req_body = json.dumps({
         "model": OLLAMA_MODEL,
         "prompt": OLLAMA_PROMPT,
         "images": [b64],
         "stream": False,
+        "keep_alive": "30m",             # que no descargue el modelo entre tapitas
+        "options": {"temperature": 0},   # misma foto -> misma respuesta
     }).encode()
     try:
         req = urllib.request.Request(
             f"{OLLAMA_HOST}/api/generate", data=req_body,
             headers={"Content-Type": "application/json"},
         )
-        resp = json.loads(urllib.request.urlopen(req, timeout=30).read())
+        resp = json.loads(urllib.request.urlopen(req, timeout=90).read())
         texto = resp["response"].strip()
     except Exception as e:
         print(f"[IA] no pude consultar Ollama para sesion={sesion}: {e}")
         return
 
-    primera_palabra = texto.split()[0].upper().strip(":,.") if texto else ""
-    if primera_palabra.startswith("SANA"):
+    primera_palabra = texto.split()[0].upper().strip(":,.!") if texto else ""
+    if primera_palabra.startswith("NO"):
         veredicto = "sana"
-    elif primera_palabra.startswith("ROTA"):
+        razon = "sin agujeros ni grietas visibles"
+    elif primera_palabra.startswith("YES") or primera_palabra.startswith("SI"):
         veredicto = "rota"
+        razon = "agujero o grieta visible"
     else:
         print(f"[IA] respuesta ambigua de Ollama, descartada: {texto!r}")
         return
 
-    razon = texto.split(None, 1)[1].strip() if len(texto.split(None, 1)) > 1 else ""
     topic = f"tapitas/veredicto_ia/{sesion}"
     mqtt_client.publish(topic, json.dumps({"veredicto": veredicto, "razon": razon}), qos=1)
     print(f"[IA] veredicto para sesion={sesion}: {veredicto} ({razon[:80]})")

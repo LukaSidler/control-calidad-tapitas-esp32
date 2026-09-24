@@ -370,7 +370,11 @@ class Ventana(QMainWindow):
             self.render_ultima()
 
     def on_veredicto(self, sesion, data):
-        i, r = self.fila_de_sesion(sesion)
+        # La ultima dudosa sin veredicto de la sesion, no la ultima fila: si
+        # Ollama tarda y ya paso otra tapita, el veredicto no le corresponde.
+        i, r = next(((i, r) for i, r in enumerate(self.filas)
+                     if r.get("sesion_id") == sesion and r.get("estado") == "dudoso"
+                     and not r.get("veredicto_ia")), (None, None))
         if r is None:
             return
         r["veredicto_ia"] = data.get("veredicto")

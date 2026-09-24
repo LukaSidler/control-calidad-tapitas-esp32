@@ -101,14 +101,27 @@ def es_dudoso(prob_rota: float) -> bool:
 # internet. Se publica aparte y de forma asincrona: NO bloquea el puente
 # serial mientras espera la respuesta del modelo.
 OLLAMA_HOST = os.environ.get("TAPITAS_OLLAMA_HOST", "http://localhost:11434")
-OLLAMA_MODEL = os.environ.get("TAPITAS_OLLAMA_MODEL", "llava-phi3")
-# En ingles y como pregunta SI/NO: llava-phi3 (modelo chico) con el prompt
-# anterior en español contestaba "SANA" siempre, aun con agujeros enormes.
-# Probado sobre 45 fotos reales: acierta 14/15 sanas y 10/12 rotas.
-OLLAMA_PROMPT = (
-    "Look at this bottle cap. Printed or embossed letters and logos are "
-    "normal. Is there a burnt hole, puncture or crack in the plastic? "
-    "Answer YES or NO first."
+OLLAMA_MODEL = os.environ.get("TAPITAS_OLLAMA_MODEL", "qwen2.5vl:3b")
+# Cada modelo necesita su propia pregunta: con la de llava, qwen contesta NO
+# a todo, y con la de qwen, llava no contesta ni SI ni NO. Comparados sobre
+# 52 fotos reales etiquetadas a mano (ver historial del proyecto):
+#   qwen2.5vl:3b  sanas 22/26  rotas 23/26  ~2.6s  <- detecta mas rotas
+#   llava-phi3    sanas 24/26  rotas 21/26  ~0.5s
+# (minicpm-v:8b y gemma3:4b no mejoraron y no entran bien en 6GB de GPU.)
+OLLAMA_PROMPTS = {
+    "qwen": (
+        "Does this bottle cap have a hole, crack, cut or melted damage? "
+        "Reply with only one word: DAMAGED or INTACT."
+    ),
+    "llava": (
+        "Look at this bottle cap. Printed or embossed letters and logos are "
+        "normal. Is there a burnt hole, puncture or crack in the plastic? "
+        "Answer YES or NO first."
+    ),
+}
+OLLAMA_PROMPT = next(
+    (p for fam, p in OLLAMA_PROMPTS.items() if OLLAMA_MODEL.startswith(fam)),
+    OLLAMA_PROMPTS["qwen"],
 )
 # Recorte cuadrado centrado que se le manda a Ollama: la tapita ocupa
 # ~750px de alto en el frame de 1920x1080, el resto es fondo que confunde.
@@ -182,11 +195,11 @@ def _pedir_veredicto_ia(sesion, img_bytes):
         print(f"[IA] no pude consultar Ollama para sesion={sesion}: {e}")
         return
 
-    primera_palabra = texto.split()[0].upper().strip(":,.!") if texto else ""
-    if primera_palabra.startswith("NO"):
+    primera_palabra = texto.split()[0].upper().strip(":,.!*") if texto else ""
+    if primera_palabra.startswith(("NO", "INTACT")):
         veredicto = "sana"
         razon = "sin agujeros ni grietas visibles"
-    elif primera_palabra.startswith("YES") or primera_palabra.startswith("SI"):
+    elif primera_palabra.startswith(("YES", "SI", "DAMAGED")):
         veredicto = "rota"
         razon = "agujero o grieta visible"
     else:

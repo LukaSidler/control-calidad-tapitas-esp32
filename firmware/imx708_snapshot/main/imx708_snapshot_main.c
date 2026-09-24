@@ -160,7 +160,7 @@ static volatile bool s_belt_running = false;
 
 /* Disparo automatico: sensor detecta -> espera -> captura sola */
 static volatile bool s_auto_capture_enabled = false;
-static volatile uint32_t s_trigger_delay_ms = 3900;  /* arranca como estimacion, se calibra a ojo */
+static volatile uint32_t s_trigger_delay_ms = 4200;  /* arranca como estimacion, se calibra a ojo */
 #define TRIGGER_DELAY_STEP_MS 50
 
 /* Tiempo extra, cinta ya parada, antes de sacar la foto -- para que

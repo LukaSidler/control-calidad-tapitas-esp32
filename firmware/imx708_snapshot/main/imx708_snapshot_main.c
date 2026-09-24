@@ -1321,16 +1321,22 @@ static void camera_capture(camera_ctx_t *ctx, bool send_image)
                 float prob_rota = -1.0f;
                 if (tinyml_classify_estado(frame, ctx->width, ctx->height, &prob_rota)) {
                     s_last_prob_rota = prob_rota;
-                    /* UMBRAL_ROTA_LOCAL es solo para que el log diga algo
-                     * legible mientras se prueba en el banco -- el valor que
-                     * de verdad decide sana/rota es el que se aplique del
-                     * lado de la Raspberry (tapitas_ingest.py) sobre el
-                     * prob_rota crudo que se manda por MQTT, asi se puede
-                     * ajustar el umbral sin reflashear el ESP32. Ver
-                     * threshold_results.txt: 0.20 recomendado. */
+                    /* UMBRAL_ROTA_LOCAL/CONFIANZA_MINIMA_LOCAL son solo para
+                     * que el log diga algo legible mientras se prueba en el
+                     * banco -- el valor que de verdad decide sana/rota/dudoso
+                     * es el que se aplique del lado de la Raspberry
+                     * (tapitas_ingest.py) sobre el prob_rota crudo que se
+                     * manda por MQTT, asi se puede ajustar sin reflashear el
+                     * ESP32. Ver threshold_results.txt: 0.20 recomendado. */
                     const float UMBRAL_ROTA_LOCAL = 0.20f;
+                    const float CONFIANZA_MINIMA_LOCAL = 0.50f;
+                    float confianza_local = (prob_rota > UMBRAL_ROTA_LOCAL)
+                                             ? prob_rota : (1.0f - prob_rota);
+                    const char *estado_local =
+                        (confianza_local < CONFIANZA_MINIMA_LOCAL) ? "DUDOSO" :
+                        (prob_rota > UMBRAL_ROTA_LOCAL) ? "ROTA" : "SANA";
                     ESP_LOGI(TAG, "  [tinyml] prob_rota=%.4f  -> ESTADO: %s", prob_rota,
-                             (prob_rota > UMBRAL_ROTA_LOCAL) ? "ROTA" : "SANA");
+                             estado_local);
                 } else {
                     ESP_LOGW(TAG, "  [tinyml] clasificacion fallo (modelo no inicializado?)");
                     s_last_prob_rota = -1.0f;

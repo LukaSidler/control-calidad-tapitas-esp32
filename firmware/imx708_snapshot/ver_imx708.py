@@ -31,12 +31,16 @@ import serial
 import threading
 import zlib
 import os
+import base64
 from datetime import datetime
 
 import numpy as np
 import cv2
 import paho.mqtt.client as mqtt
 import json
+from dotenv import load_dotenv
+
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 PORT = "/dev/ttyACM0"
 BAUD = 2000000
@@ -59,13 +63,52 @@ WINDOW_NAME = "IMX708 - vista en vivo"
 # Puente hacia la Raspberry: el ESP32 ya no toca WiFi (bug de esp-hosted-mcu
 # que reiniciaba la placa). Esta PC recibe la clasificacion por el cable
 # serial de siempre y la republica por MQTT, sin pasar por el C6 para nada.
-MQTT_BROKER_HOST = os.environ.get("TAPITAS_MQTT_HOST", "192.168.1.100")
+try:
+    MQTT_BROKER_HOST = os.environ["TAPITAS_MQTT_HOST"]
+except KeyError:
+    raise SystemExit(
+        "Falta TAPITAS_MQTT_HOST. Definila en un archivo .env junto a este "
+        "script (ver .env.example) o exportala antes de correrlo -- sin "
+        "esto el puente MQTT hablaria con un host adivinado y las "
+        "clasificaciones no le llegarian a nadie sin ningun aviso."
+    )
 MQTT_BROKER_PORT = 1883
 MQTT_TOPIC_CLASIFICACION = "tapitas/clasificacion"
 
 # Debe coincidir con SAMPLE_WINDOW del firmware (imx708_snapshot_main.c).
 # Se usa solo para dibujar el rectangulo de referencia, no afecta la captura.
 SAMPLE_WINDOW = 300
+
+# Mismo umbral/confianza minima que tapitas_ingest.py en la Raspberry (deben
+# coincidir para que "dudoso" signifique lo mismo de los dos lados). Los casos
+# dudosos son el mismo prob_rota que ya calculamos aca, asi que conviene
+# decidir aca mismo si vale la pena pedirle una segunda opinion a Ollama, en
+# vez de que la Pi tenga que pedirnos la imagen de vuelta.
+UMBRAL_ROTA = float(os.environ.get("TAPITAS_UMBRAL_ROTA", "0.20"))
+
+# Si la confianza de la clasificacion (sana o rota, la misma que se muestra en
+# el dashboard) queda por debajo de este piso, se considera dudosa -- no
+# alcanza con estar apenas del lado "sana" o "rota" del umbral.
+CONFIANZA_MINIMA_DUDOSO = float(os.environ.get("TAPITAS_CONFIANZA_MINIMA", "0.50"))
+
+
+def es_dudoso(prob_rota: float) -> bool:
+    confianza = prob_rota if prob_rota > UMBRAL_ROTA else (1 - prob_rota)
+    return confianza < CONFIANZA_MINIMA_DUDOSO
+
+# Segunda opinion local por vision, solo para los casos dudosos -- corre en
+# la GPU de esta PC (Ollama), no tiene costo por token y no depende de
+# internet. Se publica aparte y de forma asincrona: NO bloquea el puente
+# serial mientras espera la respuesta del modelo.
+OLLAMA_HOST = os.environ.get("TAPITAS_OLLAMA_HOST", "http://localhost:11434")
+OLLAMA_MODEL = os.environ.get("TAPITAS_OLLAMA_MODEL", "llava-phi3")
+OLLAMA_PROMPT = (
+    "Esta es una foto de una tapita plastica de botella, vista desde adentro, "
+    "para control de calidad. Decime si la tapita esta SANA (intacta, sin "
+    "roturas) o ROTA (con grietas, agujeros o pedazos faltantes). El texto o "
+    "logo grabado en relieve en el plastico NO es una rotura. Respondé "
+    "empezando la primera palabra con SANA o ROTA, y despues una razon breve."
+)
 
 os.makedirs(SAVE_DIR, exist_ok=True)
 ser = serial.Serial(PORT, BAUD, timeout=2)
@@ -102,6 +145,45 @@ except Exception as e:
 pending_image_bytes = None
 
 
+def _pedir_veredicto_ia(sesion, img_bytes):
+    """Le pide a Ollama (corre local, GPU de esta PC) una segunda opinion
+    sobre una tapita dudosa, y publica el resultado. Corre en su propio hilo
+    -- si Ollama no esta levantado o tarda, no afecta el puente serial."""
+    import urllib.request
+
+    b64 = base64.b64encode(img_bytes).decode()
+    req_body = json.dumps({
+        "model": OLLAMA_MODEL,
+        "prompt": OLLAMA_PROMPT,
+        "images": [b64],
+        "stream": False,
+    }).encode()
+    try:
+        req = urllib.request.Request(
+            f"{OLLAMA_HOST}/api/generate", data=req_body,
+            headers={"Content-Type": "application/json"},
+        )
+        resp = json.loads(urllib.request.urlopen(req, timeout=30).read())
+        texto = resp["response"].strip()
+    except Exception as e:
+        print(f"[IA] no pude consultar Ollama para sesion={sesion}: {e}")
+        return
+
+    primera_palabra = texto.split()[0].upper().strip(":,.") if texto else ""
+    if primera_palabra.startswith("SANA"):
+        veredicto = "sana"
+    elif primera_palabra.startswith("ROTA"):
+        veredicto = "rota"
+    else:
+        print(f"[IA] respuesta ambigua de Ollama, descartada: {texto!r}")
+        return
+
+    razon = texto.split(None, 1)[1].strip() if len(texto.split(None, 1)) > 1 else ""
+    topic = f"tapitas/veredicto_ia/{sesion}"
+    mqtt_client.publish(topic, json.dumps({"veredicto": veredicto, "razon": razon}), qos=1)
+    print(f"[IA] veredicto para sesion={sesion}: {veredicto} ({razon[:80]})")
+
+
 def handle_mqttdata_line(line):
     """Recibe 'MQTTDATA {json}' del ESP32 por serial y lo republica por MQTT."""
     global pending_image_bytes
@@ -114,12 +196,22 @@ def handle_mqttdata_line(line):
     mqtt_client.publish(MQTT_TOPIC_CLASIFICACION, json.dumps(data), qos=1)
     print(f"[MQTT] publicado: {data}")
 
-    if pending_image_bytes is not None:
+    img_bytes = pending_image_bytes
+    if img_bytes is not None:
         sesion = data.get("sesion_id") or "_sin_sesion"
         topic = f"tapitas/imagen/{sesion}"
-        mqtt_client.publish(topic, pending_image_bytes, qos=1)
-        print(f"[MQTT] imagen ({len(pending_image_bytes)} bytes) publicada en {topic}")
+        mqtt_client.publish(topic, img_bytes, qos=1)
+        print(f"[MQTT] imagen ({len(img_bytes)} bytes) publicada en {topic}")
         pending_image_bytes = None
+
+        prob_rota = data.get("prob_rota")
+        if isinstance(prob_rota, (int, float)) and es_dudoso(prob_rota):
+            sesion_ia = data.get("sesion_id") or "_sin_sesion"
+            print(f"[IA] tapita dudosa (prob_rota={prob_rota:.4f}, sesion={sesion_ia}) "
+                  f"-- consultando Ollama ({OLLAMA_MODEL})...")
+            threading.Thread(
+                target=_pedir_veredicto_ia, args=(sesion_ia, img_bytes), daemon=True,
+            ).start()
 
 
 def parse_header(line):

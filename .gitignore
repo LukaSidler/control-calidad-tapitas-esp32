@@ -42,6 +42,12 @@ __pycache__/
 .venv/
 venv/
 
+# Config local (IP de la Raspberry, etc.) -- .env.example queda en git como plantilla
+.env
+
+# Historial local de la app de escritorio (app_tapitas.py), incluye las fotos
+tapitas_local.db
+
 # ==========================================================================
 # Dataset crudo (vive fuera del repo, en dataset_tapitas/)
 # ==========================================================================

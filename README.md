@@ -29,7 +29,7 @@ control-calidad-tapitas-esp32/
 │   └── requirements.txt        # Deps de ver_imx708.py
 ├── modelo/                     # Entrenamiento, conversión y evaluación del modelo TinyML
 ├── dataset/                    # README + fotos de ejemplo (el dataset completo vive fuera del repo)
-└── raspberry/                  # Ingesta MQTT + base de datos (pendiente)
+└── raspberry/                  # Ingesta MQTT, base de datos SQLite y dashboard web
 ```
 
 ## Compilar y flashear el firmware
@@ -110,8 +110,11 @@ primero el estado de ese issue. Detalle completo en
 
 - ✅ Clasificación de color (HSV) y estado (sana/rota) funcionando en el
   ESP32-P4, validadas en banco de pruebas.
-- ⏳ Integración con Raspberry Pi (ingesta MQTT + base de datos) pendiente
-  — ver [`raspberry/README.md`](raspberry/README.md).
+- ✅ Integración con Raspberry Pi: ingesta MQTT, base de datos y dashboard
+  web en vivo — ver [`raspberry/README.md`](raspberry/README.md).
+- ✅ Segunda opinión por IA (`ver_imx708.py`): Gemini decide el color de
+  cada tapita (incluido rosa) y revisa las dudosas, con Ollama local de
+  respaldo para la rotura.
 
 ## Créditos
 

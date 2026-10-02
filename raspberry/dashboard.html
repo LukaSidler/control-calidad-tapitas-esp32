@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Control de Calidad · Inspección</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg:        #0b0f14;
+    --panel:     #131a22;
+    --panel-2:   #0e141b;
+    --line:      #24303c;
+    --text:      #d7e0ea;
+    --muted:     #7d8ea0;
+    --accent:    #35c988;
+    --accent-dim:#1d6b4a;
+    --danger:    #e5533d;
+    --mono: ui-monospace, "SFMono-Regular", "JetBrains Mono", "Consolas", monospace;
+
+    --c-naranja:  #ff7a18;
+    --c-rojo:     #e5352b;
+    --c-amarillo: #f4c400;
+    --c-azul:     #2d7ff9;
+    --c-lila:     #b57edc;
+    --c-blanco:   #f5f5f5;
+    --c-rosa:     #ff6fb1;
+    --c-otro:     #6b7a8d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 14px;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); }
+
+  header {
+    display: flex; align-items: center; gap: 16px;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--line);
+    background: linear-gradient(180deg, #141c25, #0d131a);
+    position: sticky; top: 0; z-index: 5;
+  }
+  header .brand { display: flex; flex-direction: column; gap: 3px; }
+  header h1 {
+    margin: 0; font-size: 15px; letter-spacing: 3px; text-transform: uppercase;
+    font-weight: 700;
+  }
+  header .kicker {
+    font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: var(--muted);
+  }
+  header .sep { flex: 1; }
+  .stat-total {
+    font-size: 13px; color: var(--muted); letter-spacing: 1px; text-transform: uppercase;
+  }
+  .stat-total b { color: var(--text); font-size: 18px; margin-left: 6px; }
+  .led {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 12px; letter-spacing: 1px; text-transform: uppercase; color: var(--muted);
+  }
+  .led .dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: var(--danger); box-shadow: 0 0 10px var(--danger);
+    transition: background .2s, box-shadow .2s;
+  }
+  .led.on .dot { background: var(--accent); box-shadow: 0 0 10px var(--accent); }
+
+  main { padding: 20px; display: flex; flex-direction: column; gap: 20px; max-width: 1400px; margin: 0 auto; }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+  }
+  .panel > .panel-h {
+    padding: 10px 14px; border-bottom: 1px solid var(--line);
+    font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: var(--muted);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .panel > .panel-b { padding: 14px; }
+
+  /* --- contadores --- */
+  .counters {
+    display: grid; grid-template-columns: repeat(7, 1fr); gap: 12px;
+  }
+  .counter {
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-top: 3px solid var(--cc, var(--c-otro));
+    border-radius: 6px;
+    padding: 14px 12px 16px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .counter .row1 { display: flex; align-items: center; gap: 8px; }
+  .chip {
+    width: 16px; height: 16px; border-radius: 4px;
+    background: var(--cc, var(--c-otro));
+    border: 1px solid rgba(255,255,255,.25);
+    flex: none;
+  }
+  .counter .name {
+    font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted);
+  }
+  .counter .num {
+    font-size: 40px; font-weight: 700; line-height: 1; color: var(--text);
+    font-variant-numeric: tabular-nums;
+  }
+  .counter.bump { animation: bump .5s ease; }
+  @keyframes bump {
+    0% { transform: scale(1); } 30% { transform: scale(1.06); border-top-color: #fff; }
+    100% { transform: scale(1); }
+  }
+
+  /* --- fila media: chart + ultima --- */
+  .mid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  #chartWrap { position: relative; height: 260px; }
+
+  .ultima { display: grid; grid-template-columns: 220px 1fr; gap: 16px; }
+  .foto {
+    width: 220px; height: 220px; border-radius: 6px; overflow: hidden;
+    background: var(--panel-2) repeating-linear-gradient(45deg, #10171f 0 10px, #0d131a 10px 20px);
+    border: 1px solid var(--line);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--muted); font-size: 11px; letter-spacing: 1px; text-transform: uppercase;
+  }
+  .foto img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .ultima .meta { display: flex; flex-direction: column; gap: 12px; }
+  .ultima .meta .big {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 22px; font-weight: 700; text-transform: capitalize;
+  }
+  .ultima .meta .big .chip { width: 22px; height: 22px; }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; font-size: 13px; }
+  .kv .k { color: var(--muted); text-transform: uppercase; letter-spacing: 1px; font-size: 11px; align-self: center; }
+  .kv .v { color: var(--text); }
+  .hsv { display: flex; gap: 10px; margin-top: 4px; }
+  .hsv .cell {
+    flex: 1; background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px;
+    padding: 8px 10px; text-align: center;
+  }
+  .hsv .cell .lbl { font-size: 10px; color: var(--muted); letter-spacing: 2px; }
+  .hsv .cell .val { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+  /* --- tabla --- */
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead th {
+    text-align: left; padding: 8px 10px; color: var(--muted);
+    font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase;
+    border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel);
+  }
+  thead th.num { text-align: right; }
+  tbody td { padding: 8px 10px; border-bottom: 1px solid #1a232d; white-space: nowrap; }
+  tbody tr:hover { background: #172029; }
+  tbody td.color-cell { display: flex; align-items: center; gap: 8px; text-transform: capitalize; }
+  tbody td .chip { width: 12px; height: 12px; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .tbl-scroll { overflow-x: auto; }
+  tr.fresh { animation: fresh 1.2s ease; }
+  @keyframes fresh { 0% { background: var(--accent-dim); } 100% { background: transparent; } }
+
+  .pager { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-top: 1px solid var(--line); }
+  .pager button {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 5px; padding: 6px 14px; font-family: var(--mono); font-size: 12px;
+    text-transform: uppercase; letter-spacing: 1px; cursor: pointer;
+  }
+  .pager button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  .pager button:disabled { opacity: .35; cursor: default; }
+  .pager .info { color: var(--muted); font-size: 12px; letter-spacing: 1px; }
+  .pager .badge {
+    margin-left: auto; background: var(--accent-dim); color: #dfffdf0; border: 1px solid var(--accent);
+    border-radius: 20px; padding: 3px 12px; font-size: 11px; cursor: pointer;
+  }
+  .pager .badge[hidden] { display: none; }
+  .empty { padding: 30px; text-align: center; color: var(--muted); letter-spacing: 1px; }
+
+  .btn-danger {
+    background: var(--panel-2); color: var(--danger); border: 1px solid var(--danger);
+    border-radius: 5px; padding: 5px 12px; font-family: var(--mono); font-size: 11px;
+    text-transform: uppercase; letter-spacing: 1px; cursor: pointer; margin-left: auto;
+  }
+  .btn-danger:hover { background: var(--danger); color: #fff; }
+
+  .modal-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.6);
+    display: flex; align-items: center; justify-content: center; z-index: 20;
+  }
+  .modal-overlay[hidden] { display: none; }
+  .modal {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    padding: 20px; max-width: 360px; display: flex; flex-direction: column; gap: 16px;
+  }
+  .modal p { margin: 0; font-size: 13px; line-height: 1.5; }
+  .modal .actions { display: flex; justify-content: flex-end; gap: 10px; }
+  .modal button {
+    border-radius: 5px; padding: 7px 14px; font-family: var(--mono); font-size: 12px;
+    text-transform: uppercase; letter-spacing: 1px; cursor: pointer;
+  }
+  .modal .cancelar { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); }
+  .modal .confirmar { background: var(--danger); color: #fff; border: 1px solid var(--danger); }
+
+  .estado { font-weight: 700; text-transform: uppercase; letter-spacing: .5px; }
+  .estado.sana { color: var(--accent); }
+  .estado.rota { color: var(--danger); }
+  .estado.dudoso { color: #f4c400; }
+
+  .veredicto-ia { font-size: 12px; }
+  .veredicto-ia.sana { color: var(--accent); }
+  .veredicto-ia.rota { color: var(--danger); }
+
+
+  @media (max-width: 1000px) {
+    .counters { grid-template-columns: repeat(4, 1fr); }
+    .mid { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 560px) {
+    .counters { grid-template-columns: repeat(2, 1fr); }
+    .ultima { grid-template-columns: 1fr; }
+    .foto, .foto img { width: 100%; height: 200px; }
+    header { flex-wrap: wrap; row-gap: 8px; }
+    header .kicker { display: none; }
+    .stat-total { font-size: 11px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <h1>Control de Calidad</h1>
+    <div class="kicker">Estación de inspección óptica · clasificación por color</div>
+  </div>
+  <div class="sep"></div>
+  <div class="stat-total">Piezas inspeccionadas <b id="total">0</b></div>
+  <div class="led" id="led"><span class="dot"></span><span id="ledTxt">conectando</span></div>
+</header>
+
+<main>
+  <!-- 1. contadores -->
+  <section class="panel">
+    <div class="panel-h">Conteo por color</div>
+    <div class="panel-b">
+      <div class="counters" id="counters"></div>
+    </div>
+  </section>
+
+  <!-- 2. chart + ultima -->
+  <div class="mid">
+    <section class="panel">
+      <div class="panel-h">Distribución</div>
+      <div class="panel-b"><div id="chartWrap"><canvas id="chart"></canvas></div></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-h">Última pieza inspeccionada</div>
+      <div class="panel-b">
+        <div class="ultima">
+          <div class="foto" id="foto">sin imagen</div>
+          <div class="meta" id="ultimaMeta">
+            <div class="big"><span class="chip"></span><span>—</span></div>
+            <div class="kv">
+              <span class="k">ID</span><span class="v" data-f="id">—</span>
+              <span class="k">Fecha</span><span class="v" data-f="fecha">—</span>
+              <span class="k">Sesión</span><span class="v" data-f="sesion">—</span>
+              <span class="k">Estado</span><span class="v estado" data-f="estado">—</span>
+              <span class="k">Confianza</span><span class="v" data-f="confianza">—</span>
+              <span class="k">Veredicto IA</span><span class="v veredicto-ia" data-f="veredicto_ia">—</span>
+            </div>
+            <div class="hsv">
+              <div class="cell"><div class="lbl">H</div><div class="val" data-f="h">—</div></div>
+              <div class="cell"><div class="lbl">S</div><div class="val" data-f="s">—</div></div>
+              <div class="cell"><div class="lbl">V</div><div class="val" data-f="v">—</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- 3. historial -->
+  <section class="panel">
+    <div class="panel-h">Historial de inspecciones <span id="histCount" style="color:var(--text)"></span>
+      <button class="btn-danger" id="btnBorrar">Borrar historial</button>
+    </div>
+    <div class="tbl-scroll">
+      <table>
+        <thead><tr>
+          <th>ID</th><th>Fecha</th><th>Color</th><th class="num">H</th>
+          <th class="num">S</th><th class="num">V</th><th>Estado</th>
+          <th class="num">Confianza</th><th>Veredicto IA</th><th>Sesión</th><th>Imagen</th>
+        </tr></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+      <div class="empty" id="tblEmpty" hidden>sin inspecciones todavía</div>
+    </div>
+    <div class="pager">
+      <button id="prev">‹ Anterior</button>
+      <button id="next">Siguiente ›</button>
+      <span class="info" id="pageInfo">página 1 de 1</span>
+      <span class="badge" id="freshBadge" hidden></span>
+    </div>
+  </section>
+</main>
+
+<div class="modal-overlay" id="modalBorrar" hidden>
+  <div class="modal">
+    <p>¿Borrar <b id="modalTotal">0</b> inspecciones del historial? Las imágenes en disco no se eliminan. Esta acción no se puede deshacer.</p>
+    <div class="actions">
+      <button class="cancelar" id="modalCancelar">Cancelar</button>
+      <button class="confirmar" id="modalConfirmar">Borrar todo</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  "use strict";
+
+  const COLORS = ["naranja", "rojo", "amarillo", "azul", "lila", "blanco", "rosa"];
+  const HEX = {
+    naranja: "#ff7a18", rojo: "#e5352b", amarillo: "#f4c400",
+    azul: "#2d7ff9", lila: "#b57edc", blanco: "#f5f5f5", rosa: "#ff6fb1",
+    otro: "#6b7a8d",
+  };
+  // Si el color vino de la IA y difiere del medido por el ESP32, se aclara.
+  const colorTitle = r => (r.color_ia && r.color_esp32 && r.color_esp32 !== r.color)
+    ? `color IA (${r.color_ia_origen || "IA"}); el ESP32 midió ${r.color_esp32}` : "";
+  const PAGE_SIZE = 25;
+  const hexOf = c => HEX[c] || HEX.otro;
+  const num = v => (v === null || v === undefined || v === "") ? "—"
+                    : (Math.round(v * 10) / 10).toString();
+  // Confianza = que tan lejos esta prob_rota del punto medio de la decision
+  // tomada (0 = justo en el umbral, 100% = clasificacion inequivoca).
+  const confianzaPct = row => {
+    if (row.prob_rota === null || row.prob_rota === undefined) return "—";
+    const p = row.prob_rota;
+    if (row.estado === "dudoso") return Math.round(p * 100) + "% rota";
+    const c = row.estado === "rota" ? p : (1 - p);
+    return Math.round(c * 100) + "%";
+  };
+  // Veredicto de un modelo de vision, segunda opinion solo para casos "dudoso".
+  // No reemplaza el estado -- se muestra aparte.
+  const veredictoIaTxt = row => row.veredicto_ia ? row.veredicto_ia.toUpperCase() : "—";
+  // Razon + modelo que contesto, ej. "agujero o grieta visible (gemini-3.1-flash-lite)"
+  const veredictoIaTitle = row => row.veredicto_ia ? (row.veredicto_ia_razon || "") : "";
+  const esc = s => String(s ?? "").replace(/[&<>"']/g, m => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
+  const fmtDate = ts => {
+    if (!ts) return "—";
+    const d = new Date(ts);
+    return isNaN(d) ? esc(ts) : d.toLocaleString("es-AR", { hour12: false });
+  };
+
+  const state = { conteos: null, page: 1, totalPages: 1, total: 0, pendientes: 0 };
+
+  // ---- contadores ----
+  const countersEl = document.getElementById("counters");
+  const counterNodes = {};
+  for (const c of COLORS) {
+    const el = document.createElement("div");
+    el.className = "counter";
+    el.style.setProperty("--cc", hexOf(c));
+    el.innerHTML = `<div class="row1"><span class="chip"></span>` +
+                   `<span class="name">${c}</span></div><div class="num">0</div>`;
+    countersEl.appendChild(el);
+    counterNodes[c] = el.querySelector(".num");
+  }
+
+  function renderConteos(conteos, bumpColor) {
+    state.conteos = conteos;
+    let total = 0;
+    for (const c of COLORS) {
+      const n = (conteos.por_color && conteos.por_color[c]) || 0;
+      total += n;
+      if (counterNodes[c].textContent !== String(n)) {
+        counterNodes[c].textContent = n;
+      }
+    }
+    // sumamos "otros" al total mostrado en el header
+    let otrosTotal = 0;
+    for (const k in (conteos.otros || {})) otrosTotal += conteos.otros[k];
+    document.getElementById("total").textContent = conteos.total ?? (total + otrosTotal);
+    if (bumpColor && counterNodes[bumpColor]) {
+      const card = counterNodes[bumpColor].closest(".counter");
+      card.classList.remove("bump"); void card.offsetWidth; card.classList.add("bump");
+    }
+    renderChart();
+  }
+
+  // ---- chart ----
+  let chart;
+  function renderChart() {
+    const data = COLORS.map(c => (state.conteos?.por_color?.[c]) || 0);
+    if (!chart) {
+      chart = new Chart(document.getElementById("chart"), {
+        type: "bar",
+        data: {
+          labels: COLORS.map(c => c[0].toUpperCase() + c.slice(1)),
+          datasets: [{
+            data, backgroundColor: COLORS.map(hexOf),
+            borderColor: COLORS.map(hexOf), borderWidth: 1, borderRadius: 3,
+          }],
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: false }, tooltip: { intersect: false } },
+          scales: {
+            x: { grid: { color: "rgba(255,255,255,.05)" }, ticks: { color: "#9fb0c0" } },
+            y: { beginAtZero: true, grid: { color: "rgba(255,255,255,.06)" },
+                 ticks: { color: "#9fb0c0", precision: 0 } },
+          },
+        },
+      });
+    } else {
+      chart.data.datasets[0].data = data;
+      chart.update("none");
+    }
+  }
+
+  // ---- ultima pieza inspeccionada ----
+  const fotoEl = document.getElementById("foto");
+  const metaEl = document.getElementById("ultimaMeta");
+  let ultimaId = null;
+
+  function renderUltima(row) {
+    if (!row) return;
+    ultimaId = row.id;
+    const c = row.color_norm || "otro";
+    metaEl.querySelector(".big .chip").style.background = hexOf(c);
+    metaEl.querySelector(".big span:last-child").textContent = row.color || "—";
+    metaEl.querySelector(".big").title = colorTitle(row);
+    metaEl.querySelector('[data-f="id"]').textContent = "#" + row.id;
+    metaEl.querySelector('[data-f="fecha"]').textContent = fmtDate(row.timestamp);
+    metaEl.querySelector('[data-f="sesion"]').textContent = row.sesion_id || "—";
+    const estadoEl = metaEl.querySelector('[data-f="estado"]');
+    estadoEl.textContent = row.estado || "—";
+    estadoEl.classList.remove("sana", "rota", "dudoso");
+    if (row.estado) estadoEl.classList.add(row.estado);
+    metaEl.querySelector('[data-f="confianza"]').textContent = confianzaPct(row);
+    const veredictoEl = metaEl.querySelector('[data-f="veredicto_ia"]');
+    veredictoEl.textContent = veredictoIaTxt(row);
+    veredictoEl.title = veredictoIaTitle(row);
+    veredictoEl.classList.remove("sana", "rota");
+    if (row.veredicto_ia) veredictoEl.classList.add(row.veredicto_ia);
+    metaEl.querySelector('[data-f="h"]').textContent = num(row.hue);
+    metaEl.querySelector('[data-f="s"]').textContent = num(row.saturation);
+    metaEl.querySelector('[data-f="v"]').textContent = num(row.value);
+    setFoto(row.imagen_url);
+  }
+  function setFoto(url) {
+    if (url) {
+      fotoEl.innerHTML = `<img alt="última pieza inspeccionada" src="${esc(url)}?v=${Date.now()}">`;
+    } else {
+      fotoEl.textContent = "sin imagen";
+    }
+  }
+
+  // ---- tabla / paginado ----
+  const tbody = document.getElementById("tbody");
+  const tblEmpty = document.getElementById("tblEmpty");
+  const freshBadge = document.getElementById("freshBadge");
+
+  function rowHtml(r, fresh) {
+    const c = r.color_norm || "otro";
+    const img = r.imagen_url
+      ? `<a href="${esc(r.imagen_url)}" target="_blank">ver</a>` : "—";
+    return `<tr data-id="${r.id}" class="${fresh ? "fresh" : ""}">
+      <td>#${r.id}</td>
+      <td>${fmtDate(r.timestamp)}</td>
+      <td class="color-cell" title="${esc(colorTitle(r))}"><span class="chip" style="background:${hexOf(c)}"></span>${esc(r.color || "—")}</td>
+      <td class="num">${num(r.hue)}</td>
+      <td class="num">${num(r.saturation)}</td>
+      <td class="num">${num(r.value)}</td>
+      <td class="estado ${esc(r.estado || "")}">${esc(r.estado || "—")}</td>
+      <td class="num">${confianzaPct(r)}</td>
+      <td class="veredicto-ia ${esc(r.veredicto_ia || "")}" title="${esc(veredictoIaTitle(r))}">${veredictoIaTxt(r)}</td>
+      <td>${esc(r.sesion_id || "—")}</td>
+      <td>${img}</td>
+    </tr>`;
+  }
+
+  function renderTabla(h) {
+    state.page = h.page; state.totalPages = h.total_pages; state.total = h.total;
+    tbody.innerHTML = h.rows.map(r => rowHtml(r, false)).join("");
+    tblEmpty.hidden = h.rows.length > 0;
+    document.getElementById("histCount").textContent = h.total ? `(${h.total})` : "";
+    document.getElementById("pageInfo").textContent =
+      `página ${h.page} de ${h.total_pages}`;
+    document.getElementById("prev").disabled = h.page <= 1;
+    document.getElementById("next").disabled = h.page >= h.total_pages;
+    if (h.page === 1) { state.pendientes = 0; freshBadge.hidden = true; }
+  }
+
+  async function loadPage(p) {
+    try {
+      const r = await fetch(`/api/historial?page=${p}&page_size=${PAGE_SIZE}`);
+      renderTabla(await r.json());
+    } catch (e) { console.error(e); }
+  }
+
+  document.getElementById("prev").onclick = () => loadPage(Math.max(1, state.page - 1));
+  document.getElementById("next").onclick = () =>
+    loadPage(Math.min(state.totalPages, state.page + 1));
+  freshBadge.onclick = () => loadPage(1);
+
+  // ---- borrar historial ----
+  const modalBorrar = document.getElementById("modalBorrar");
+  document.getElementById("btnBorrar").onclick = () => {
+    document.getElementById("modalTotal").textContent = state.total;
+    modalBorrar.hidden = false;
+  };
+  document.getElementById("modalCancelar").onclick = () => { modalBorrar.hidden = true; };
+  document.getElementById("modalConfirmar").onclick = async () => {
+    modalBorrar.hidden = true;
+    try {
+      await fetch("/api/historial", { method: "DELETE" });
+      onHistorialBorrado();
+    } catch (e) { console.error(e); }
+  };
+
+  function onHistorialBorrado() {
+    ultimaId = null;
+    metaEl.querySelector(".big span:last-child").textContent = "—";
+    metaEl.querySelectorAll("[data-f]").forEach(el => el.textContent = "—");
+    setFoto(null);
+    renderConteos({ total: 0, por_color: {}, otros: {} });
+    loadPage(1);
+  }
+
+  function onNueva(row) {
+    // actualizar tabla solo si estamos en pagina 1
+    if (state.page === 1) {
+      tblEmpty.hidden = true;
+      tbody.insertAdjacentHTML("afterbegin", rowHtml(row, true));
+      while (tbody.rows.length > PAGE_SIZE) tbody.deleteRow(-1);
+      state.total += 1;
+      document.getElementById("histCount").textContent = `(${state.total})`;
+    } else {
+      state.pendientes += 1;
+      freshBadge.hidden = false;
+      freshBadge.textContent = `${state.pendientes} nuevas — ir a página 1`;
+    }
+  }
+
+  function onActualizada(f) {
+    // foto, veredicto_ia y/o color_ia que llegaron despues de la clasificacion
+    const conColor = f.color_norm !== undefined;
+    if (f.id === ultimaId) {
+      setFoto(f.imagen_url);
+      if (conColor) {
+        metaEl.querySelector(".big .chip").style.background = hexOf(f.color_norm || "otro");
+        metaEl.querySelector(".big span:last-child").textContent = f.color || "—";
+        metaEl.querySelector(".big").title = colorTitle({...f, color_ia: f.color});
+      }
+      if (f.veredicto_ia !== undefined) {
+        const veredictoEl = metaEl.querySelector('[data-f="veredicto_ia"]');
+        veredictoEl.textContent = veredictoIaTxt(f);
+        veredictoEl.title = veredictoIaTitle(f);
+        veredictoEl.classList.remove("sana", "rota");
+        if (f.veredicto_ia) veredictoEl.classList.add(f.veredicto_ia);
+      }
+    }
+    const tr = tbody.querySelector(`tr[data-id="${f.id}"]`);
+    if (tr) {
+      const imgCell = tr.cells[tr.cells.length - 1];
+      imgCell.innerHTML = f.imagen_url
+        ? `<a href="${esc(f.imagen_url)}" target="_blank">ver</a>` : "—";
+      if (conColor) {
+        const colorCell = tr.querySelector(".color-cell");
+        colorCell.innerHTML = `<span class="chip" style="background:${hexOf(f.color_norm || "otro")}"></span>${esc(f.color || "—")}`;
+        colorCell.title = colorTitle({...f, color_ia: f.color});
+      }
+      if (f.veredicto_ia !== undefined) {
+        const veredictoCell = tr.querySelector(".veredicto-ia");
+        veredictoCell.textContent = veredictoIaTxt(f);
+        veredictoCell.title = veredictoIaTitle(f);
+        veredictoCell.classList.remove("sana", "rota");
+        if (f.veredicto_ia) veredictoCell.classList.add(f.veredicto_ia);
+      }
+    }
+  }
+
+  // ---- websocket ----
+  const led = document.getElementById("led");
+  const ledTxt = document.getElementById("ledTxt");
+  let ws, backoff = 1000;
+
+  function connect() {
+    const proto = location.protocol === "https:" ? "wss" : "ws";
+    ws = new WebSocket(`${proto}://${location.host}/ws`);
+
+    ws.onopen = () => {
+      backoff = 1000;
+      led.classList.add("on"); ledTxt.textContent = "en vivo";
+    };
+    ws.onclose = () => {
+      led.classList.remove("on"); ledTxt.textContent = "reconectando";
+      setTimeout(connect, backoff);
+      backoff = Math.min(backoff * 1.7, 15000);
+    };
+    ws.onerror = () => ws.close();
+    ws.onmessage = (ev) => {
+      let msg; try { msg = JSON.parse(ev.data); } catch { return; }
+      if (msg.tipo === "snapshot") {
+        renderConteos(msg.conteos);
+        renderUltima(msg.ultima);
+        renderTabla(msg.historial);
+      } else if (msg.tipo === "nueva") {
+        renderConteos(msg.conteos, msg.fila.color_norm);
+        renderUltima(msg.fila);
+        onNueva(msg.fila);
+      } else if (msg.tipo === "actualizada") {
+        if (msg.conteos) renderConteos(msg.conteos, msg.fila.color_norm);
+        onActualizada(msg.fila);
+      } else if (msg.tipo === "borrado") {
+        onHistorialBorrado();
+      }
+    };
+
+    // keepalive
+    setInterval(() => { if (ws.readyState === 1) ws.send("ping"); }, 25000);
+  }
+
+  // primer render por REST (por si el WS tarda) y luego conectamos
+  Promise.all([
+    fetch("/api/conteos").then(r => r.json()).catch(() => null),
+    fetch("/api/ultima").then(r => r.json()).catch(() => null),
+    fetch(`/api/historial?page=1&page_size=${PAGE_SIZE}`).then(r => r.json()).catch(() => null),
+  ]).then(([c, u, h]) => {
+    if (c) renderConteos(c); else renderChart();
+    if (u) renderUltima(u);
+    if (h) renderTabla(h);
+    connect();
+  });
+})();
+</script>
+</body>
+</html>

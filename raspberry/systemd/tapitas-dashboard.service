@@ -1,0 +1,30 @@
+[Unit]
+Description=Tapitas - dashboard web (FastAPI)
+Documentation=file:/home/sidler/tapitas/tapitas_dashboard.py
+After=network-online.target tapitas-ingest.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sidler
+Group=sidler
+WorkingDirectory=/home/sidler/tapitas
+ExecStart=/usr/bin/python3 /home/sidler/tapitas/tapitas_dashboard.py
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=10
+
+# Endurecimiento basico (mismo patron que tapitas-ingest.service)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+RestrictSUIDSGID=true
+ProtectSystem=strict
+# solo lectura de la DB, pero SQLite en modo WAL necesita escribir los
+# sidecar -wal/-shm, por eso se mantiene el path como RW (igual que ingest)
+ReadWritePaths=/home/sidler/tapitas
+
+[Install]
+WantedBy=multi-user.target

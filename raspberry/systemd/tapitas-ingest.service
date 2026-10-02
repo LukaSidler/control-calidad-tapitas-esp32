@@ -1,0 +1,28 @@
+[Unit]
+Description=Tapitas - ingesta MQTT a SQLite
+Documentation=file:/home/sidler/tapitas/tapitas_ingest.py
+After=network-online.target mosquitto.service
+Wants=network-online.target mosquitto.service
+
+[Service]
+Type=simple
+User=sidler
+Group=sidler
+WorkingDirectory=/home/sidler/tapitas
+ExecStart=/usr/bin/python3 /home/sidler/tapitas/tapitas_ingest.py
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=10
+
+# Endurecimiento basico
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+RestrictSUIDSGID=true
+ProtectSystem=strict
+ReadWritePaths=/home/sidler/tapitas
+
+[Install]
+WantedBy=multi-user.target

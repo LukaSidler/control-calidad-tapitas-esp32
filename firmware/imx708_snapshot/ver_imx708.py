@@ -32,6 +32,7 @@ import threading
 import zlib
 import os
 import base64
+import uuid
 from datetime import datetime
 
 import numpy as np
@@ -144,6 +145,24 @@ if TAPITAS_IA == "gemini" and not GEMINI_API_KEY:
     print("[IA] TAPITAS_IA=gemini pero falta GEMINI_API_KEY en el .env -- uso solo Ollama")
     TAPITAS_IA = "ollama"
 
+# Color por IA para CADA tapita (no solo las dudosas): los cortes de matiz del
+# ESP32 se corren con la iluminacion del lugar, el modelo no. Sobre 120 fotos
+# (luz de la escuela y de casa, colores revisados a mano) Gemini acerto
+# 119/120 contra 102/120 del ESP32, y reconoce "rosa", que el ESP32 no tiene.
+# El color del ESP32 queda como valor inmediato y de respaldo.
+# Va con el recorte central; avisar que "corrija la dominante de luz" hacia
+# que las azules salieran blancas. TAPITAS_COLOR_IA=0 lo desactiva.
+COLOR_IA = os.environ.get("TAPITAS_COLOR_IA", "1") != "0"
+COLOR_PROMPT = (
+    "What color is the bottle cap? Off-white, cream or ivory caps count as "
+    "WHITE; only saturated yellow counts as YELLOW. Reply with only one word: "
+    "ORANGE, RED, YELLOW, BLUE, PURPLE, WHITE or PINK."
+)
+COLORES_IA = {
+    "ORANGE": "naranja", "RED": "rojo", "YELLOW": "amarillo", "BLUE": "azul",
+    "PURPLE": "lila", "WHITE": "blanco", "PINK": "rosa",
+}
+
 os.makedirs(SAVE_DIR, exist_ok=True)
 ser = serial.Serial(PORT, BAUD, timeout=2)
 
@@ -179,13 +198,24 @@ except Exception as e:
 pending_image_bytes = None
 
 
-def _consultar_gemini(img_bytes):
-    """Manda la foto entera a Gemini y devuelve el texto de la respuesta."""
+def _recorte_central(img_bytes):
+    """Recorte cuadrado de OLLAMA_CROP px centrado (donde cae la tapita)."""
+    img = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        return img_bytes
+    h, w = img.shape[:2]
+    c = min(OLLAMA_CROP, h, w)
+    img = img[(h - c) // 2:(h + c) // 2, (w - c) // 2:(w + c) // 2]
+    return cv2.imencode(".jpg", img)[1].tobytes()
+
+
+def _consultar_gemini(img_bytes, prompt):
+    """Manda la foto a Gemini y devuelve el texto de la respuesta."""
     import urllib.request
 
     req_body = json.dumps({
         "contents": [{"parts": [
-            {"text": GEMINI_PROMPT},
+            {"text": prompt},
             {"inline_data": {"mime_type": "image/jpeg",
                              "data": base64.b64encode(img_bytes).decode()}},
         ]}],
@@ -204,21 +234,14 @@ def _consultar_gemini(img_bytes):
     return "".join(p.get("text", "") for p in partes if not p.get("thought")).strip()
 
 
-def _consultar_ollama(img_bytes):
+def _consultar_ollama(img_bytes, prompt):
     """Manda el recorte central a Ollama (GPU local) y devuelve el texto."""
     import urllib.request
 
-    img = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_COLOR)
-    if img is not None:
-        h, w = img.shape[:2]
-        c = min(OLLAMA_CROP, h, w)
-        img = img[(h - c) // 2:(h + c) // 2, (w - c) // 2:(w + c) // 2]
-        img_bytes = cv2.imencode(".jpg", img)[1].tobytes()
-
     req_body = json.dumps({
         "model": OLLAMA_MODEL,
-        "prompt": OLLAMA_PROMPT,
-        "images": [base64.b64encode(img_bytes).decode()],
+        "prompt": prompt,
+        "images": [base64.b64encode(_recorte_central(img_bytes)).decode()],
         "stream": False,
         "keep_alive": "30m",             # que no descargue el modelo entre tapitas
         "options": {"temperature": 0},   # misma foto -> misma respuesta
@@ -230,22 +253,29 @@ def _consultar_ollama(img_bytes):
     return json.loads(urllib.request.urlopen(req, timeout=90).read())["response"].strip()
 
 
-def _pedir_veredicto_ia(sesion, img_bytes):
-    """Pide una segunda opinion sobre una tapita dudosa (Gemini, o Ollama
-    local si Gemini falla o no esta configurado) y publica el resultado.
-    Corre en su propio hilo -- si la IA tarda, no afecta el puente serial."""
-    texto, origen = None, None
+def _preguntar_ia(que, sesion, img_gemini, img_bytes, prompt_gemini, prompt_ollama):
+    """Pregunta a Gemini y, si falla o no esta configurado, a Ollama local.
+    Devuelve (texto, modelo) o (None, None) si no contesto ninguno."""
     if TAPITAS_IA == "gemini":
         try:
-            texto, origen = _consultar_gemini(img_bytes), GEMINI_MODEL
+            return _consultar_gemini(img_gemini, prompt_gemini), GEMINI_MODEL
         except Exception as e:
-            print(f"[IA] Gemini fallo para sesion={sesion} ({e}) -- uso Ollama de respaldo")
+            print(f"[IA] Gemini fallo ({que}, sesion={sesion}): {e} -- uso Ollama de respaldo")
+    try:
+        return _consultar_ollama(img_bytes, prompt_ollama), OLLAMA_MODEL
+    except Exception as e:
+        print(f"[IA] no pude consultar Ollama ({que}, sesion={sesion}): {e}")
+        return None, None
+
+
+def _pedir_veredicto_ia(sesion, pieza_id, img_bytes):
+    """Pide una segunda opinion sobre una tapita dudosa y publica el
+    resultado. Corre en su propio hilo -- si la IA tarda, no afecta el
+    puente serial. A Gemini le va mejor con la foto entera."""
+    texto, origen = _preguntar_ia("rotura", sesion, img_bytes, img_bytes,
+                                  GEMINI_PROMPT, OLLAMA_PROMPT)
     if texto is None:
-        try:
-            texto, origen = _consultar_ollama(img_bytes), OLLAMA_MODEL
-        except Exception as e:
-            print(f"[IA] no pude consultar Ollama para sesion={sesion}: {e}")
-            return
+        return
 
     primera_palabra = texto.split()[0].upper().strip(":,.!*") if texto else ""
     if primera_palabra.startswith(("NO", "INTACT")):
@@ -259,8 +289,29 @@ def _pedir_veredicto_ia(sesion, img_bytes):
         return
 
     topic = f"tapitas/veredicto_ia/{sesion}"
-    mqtt_client.publish(topic, json.dumps({"veredicto": veredicto, "razon": razon}), qos=1)
+    mqtt_client.publish(topic, json.dumps(
+        {"veredicto": veredicto, "razon": razon, "pieza_id": pieza_id}), qos=1)
     print(f"[IA] veredicto para sesion={sesion}: {veredicto} ({razon[:80]})")
+
+
+def _pedir_color_ia(sesion, pieza_id, img_bytes, color_esp32):
+    """Pide el color de la tapita a la IA y lo publica. Corre en su propio hilo."""
+    recorte = _recorte_central(img_bytes)
+    texto, origen = _preguntar_ia("color", sesion, recorte, img_bytes,
+                                  COLOR_PROMPT, COLOR_PROMPT)
+    if texto is None:
+        return
+    palabra = texto.split()[0].upper().strip(":,.!*") if texto else ""
+    color = COLORES_IA.get(palabra)
+    if color is None:
+        print(f"[IA] color ambiguo de {origen}, descartado: {texto!r}")
+        return
+
+    topic = f"tapitas/color_ia/{sesion}"
+    mqtt_client.publish(topic, json.dumps(
+        {"color": color, "origen": origen, "pieza_id": pieza_id}), qos=1)
+    aviso = "" if color == color_esp32 else f"  (el ESP32 dijo {color_esp32})"
+    print(f"[IA] color para sesion={sesion}: {color} ({origen}){aviso}")
 
 
 def handle_mqttdata_line(line):
@@ -272,6 +323,10 @@ def handle_mqttdata_line(line):
     except json.JSONDecodeError as e:
         print(f"[MQTT] JSON invalido del ESP32, descartado: {e} -- linea: {payload!r}")
         return
+    # Identificador de esta tapita: los resultados de IA llegan segundos
+    # despues, y con esto se asocian a ella aunque ya haya pasado otra.
+    pieza_id = uuid.uuid4().hex[:12]
+    data["pieza_id"] = pieza_id
     mqtt_client.publish(MQTT_TOPIC_CLASIFICACION, json.dumps(data), qos=1)
     print(f"[MQTT] publicado: {data}")
 
@@ -283,13 +338,18 @@ def handle_mqttdata_line(line):
         print(f"[MQTT] imagen ({len(img_bytes)} bytes) publicada en {topic}")
         pending_image_bytes = None
 
+        if COLOR_IA:
+            threading.Thread(
+                target=_pedir_color_ia, args=(sesion, pieza_id, img_bytes, data.get("color")),
+                daemon=True,
+            ).start()
+
         prob_rota = data.get("prob_rota")
         if isinstance(prob_rota, (int, float)) and es_dudoso(prob_rota):
-            sesion_ia = data.get("sesion_id") or "_sin_sesion"
-            print(f"[IA] tapita dudosa (prob_rota={prob_rota:.4f}, sesion={sesion_ia}) "
+            print(f"[IA] tapita dudosa (prob_rota={prob_rota:.4f}, sesion={sesion}) "
                   f"-- consultando {GEMINI_MODEL if TAPITAS_IA == 'gemini' else OLLAMA_MODEL}...")
             threading.Thread(
-                target=_pedir_veredicto_ia, args=(sesion_ia, img_bytes), daemon=True,
+                target=_pedir_veredicto_ia, args=(sesion, pieza_id, img_bytes), daemon=True,
             ).start()
 
 

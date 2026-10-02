@@ -2,7 +2,7 @@
 """
 app_tapitas.py - Version de escritorio (PyQt6) del dashboard web de tapitas.
 
-Escucha el broker MQTT (clasificacion, imagen y veredicto de la IA) y guarda
+Escucha el broker MQTT (clasificacion, imagen, color y veredicto de la IA) y guarda
 todo en su propia base SQLite local, asi el historial no depende de la
 Raspberry. Usa el mismo .env que ver_imx708.py: con TAPITAS_MQTT_HOST=localhost
 y Mosquitto corriendo en esta PC funciona sin red ni Raspberry.
@@ -37,10 +37,11 @@ DB_PATH = os.environ.get("TAPITAS_LOCAL_DB", os.path.join(BASE_DIR, "tapitas_loc
 UMBRAL_ROTA = float(os.environ.get("TAPITAS_UMBRAL_ROTA", "0.20"))
 CONFIANZA_MINIMA_DUDOSO = float(os.environ.get("TAPITAS_CONFIANZA_MINIMA", "0.50"))
 
-COLORES = ["naranja", "rojo", "amarillo", "azul", "lila", "blanco"]
+COLORES = ["naranja", "rojo", "amarillo", "azul", "lila", "blanco", "rosa"]
 HEX = {
     "naranja": "#ff7a18", "rojo": "#e5352b", "amarillo": "#f4c400",
-    "azul": "#2d7ff9", "lila": "#b57edc", "blanco": "#f5f5f5", "otro": "#6b7a8d",
+    "azul": "#2d7ff9", "lila": "#b57edc", "blanco": "#f5f5f5", "rosa": "#ff6fb1",
+    "otro": "#6b7a8d",
 }
 COLOR_ESTADO = {"sana": "#35c988", "rota": "#e5533d", "dudoso": "#f4c400"}
 MAX_FILAS = 200
@@ -87,6 +88,11 @@ def norm_color(c):
     return c if c in COLORES else "otro"
 
 
+def color_final(r):
+    """El color de la IA si ya llego, si no el que midio el ESP32."""
+    return r.get("color_ia") or r.get("color")
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS clasificacion (
     id                 INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -100,17 +106,26 @@ CREATE TABLE IF NOT EXISTS clasificacion (
     estado             TEXT,
     imagen             BLOB,
     veredicto_ia       TEXT,
-    veredicto_ia_razon TEXT
+    veredicto_ia_razon TEXT,
+    pieza_id           TEXT,
+    color_ia           TEXT,
+    color_ia_origen    TEXT
 );
 """
 COLS_SIN_IMAGEN = ("id, timestamp, sesion_id, color, hue, saturation, value, "
-                   "prob_rota, estado, veredicto_ia, veredicto_ia_razon")
+                   "prob_rota, estado, veredicto_ia, veredicto_ia_razon, "
+                   "pieza_id, color_ia, color_ia_origen")
 
 
 def db_connect():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(clasificacion)")}
+    for col in ("pieza_id", "color_ia", "color_ia_origen"):
+        if col not in cols:  # DB creada por una version anterior de la app
+            conn.execute(f"ALTER TABLE clasificacion ADD COLUMN {col} TEXT")
+    conn.commit()
     return conn
 
 
@@ -119,6 +134,7 @@ class Bus(QObject):
     nueva = Signal(dict)
     imagen = Signal(str, bytes)
     veredicto = Signal(str, dict)
+    color = Signal(str, dict)
     conexion = Signal(bool)
 
 
@@ -244,6 +260,7 @@ class Ventana(QMainWindow):
         bus.nueva.connect(self.on_nueva)
         bus.imagen.connect(self.on_imagen)
         bus.veredicto.connect(self.on_veredicto)
+        bus.color.connect(self.on_color)
         bus.conexion.connect(self.on_conexion)
         self.cargar_historial()
 
@@ -262,7 +279,7 @@ class Ventana(QMainWindow):
         except ValueError:
             pass
         return [
-            f"#{r['id']}", hora, r.get("color") or "—", num(r.get("hue")),
+            f"#{r['id']}", hora, color_final(r) or "—", num(r.get("hue")),
             num(r.get("saturation")), num(r.get("value")),
             (r.get("estado") or "—").upper(), confianza_txt(r),
             (r.get("veredicto_ia") or "—").upper(), r.get("sesion_id") or "—",
@@ -274,7 +291,10 @@ class Ventana(QMainWindow):
             if col in (3, 4, 5, 7):
                 item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             if col == 2:
-                item.setForeground(QColor(HEX[norm_color(r.get("color"))]))
+                item.setForeground(QColor(HEX[norm_color(color_final(r))]))
+                if r.get("color_ia") and r.get("color_ia") != r.get("color"):
+                    item.setToolTip(f"color IA ({r.get('color_ia_origen') or 'IA'}); "
+                                    f"el ESP32 midió {r.get('color')}")
             if col == 6 and r.get("estado") in COLOR_ESTADO:
                 item.setForeground(QColor(COLOR_ESTADO[r["estado"]]))
             if col == 8 and r.get("veredicto_ia") in COLOR_ESTADO:
@@ -285,9 +305,9 @@ class Ventana(QMainWindow):
         if not self.filas:
             return
         r = self.filas[0]
-        self.lbl_color.setText((r.get("color") or "—").capitalize())
+        self.lbl_color.setText((color_final(r) or "—").capitalize())
         self.lbl_color.setStyleSheet(
-            f"color:{HEX[norm_color(r.get('color'))]}; font-size:22px; font-weight:bold")
+            f"color:{HEX[norm_color(color_final(r))]}; font-size:22px; font-weight:bold")
         self.campos["id"].setText(f"#{r['id']}")
         self.campos["hora"].setText(self.celdas(r)[1])
         self.campos["sesion"].setText(r.get("sesion_id") or "—")
@@ -314,9 +334,18 @@ class Ventana(QMainWindow):
                 return i, r
         return None, None
 
+    def fila_de_pieza(self, pieza_id):
+        """Fila en pantalla de esa tapita (los mensajes de IA traen pieza_id)."""
+        if pieza_id:
+            for i, r in enumerate(self.filas):
+                if r.get("pieza_id") == pieza_id:
+                    return i, r
+        return None, None
+
     def cargar_historial(self):
         for fila in self.db.execute(
-                "SELECT color, COUNT(*) AS n FROM clasificacion GROUP BY color"):
+                "SELECT COALESCE(color_ia, color) AS color, COUNT(*) AS n "
+                "FROM clasificacion GROUP BY COALESCE(color_ia, color)"):
             c = norm_color(fila["color"])
             if c in self.conteos:
                 self.conteos[c] += fila["n"]
@@ -337,13 +366,13 @@ class Ventana(QMainWindow):
     # ---- eventos ----
     def on_nueva(self, data):
         r = {k: data.get(k) for k in
-             ("sesion_id", "color", "hue", "saturation", "value", "prob_rota")}
+             ("sesion_id", "color", "hue", "saturation", "value", "prob_rota", "pieza_id")}
         r["timestamp"] = datetime.now().astimezone().isoformat()
         r["estado"] = estado_de(r.get("prob_rota"))
         cur = self.db.execute(
             "INSERT INTO clasificacion (timestamp, sesion_id, color, hue, saturation, "
-            "value, prob_rota, estado) VALUES (:timestamp, :sesion_id, :color, :hue, "
-            ":saturation, :value, :prob_rota, :estado)", r)
+            "value, prob_rota, estado, pieza_id) VALUES (:timestamp, :sesion_id, :color, "
+            ":hue, :saturation, :value, :prob_rota, :estado, :pieza_id)", r)
         self.db.commit()
         r["id"] = cur.lastrowid
         self.filas.insert(0, r)
@@ -370,11 +399,13 @@ class Ventana(QMainWindow):
             self.render_ultima()
 
     def on_veredicto(self, sesion, data):
-        # La ultima dudosa sin veredicto de la sesion, no la ultima fila: si
-        # Ollama tarda y ya paso otra tapita, el veredicto no le corresponde.
-        i, r = next(((i, r) for i, r in enumerate(self.filas)
-                     if r.get("sesion_id") == sesion and r.get("estado") == "dudoso"
-                     and not r.get("veredicto_ia")), (None, None))
+        i, r = self.fila_de_pieza(data.get("pieza_id"))
+        if r is None:
+            # Mensaje sin pieza_id (version vieja de ver_imx708.py): la ultima
+            # dudosa sin veredicto de la sesion, no la ultima fila.
+            i, r = next(((i, r) for i, r in enumerate(self.filas)
+                         if r.get("sesion_id") == sesion and r.get("estado") == "dudoso"
+                         and not r.get("veredicto_ia")), (None, None))
         if r is None:
             return
         r["veredicto_ia"] = data.get("veredicto")
@@ -383,6 +414,29 @@ class Ventana(QMainWindow):
             "UPDATE clasificacion SET veredicto_ia = ?, veredicto_ia_razon = ? WHERE id = ?",
             (r["veredicto_ia"], r["veredicto_ia_razon"], r["id"]))
         self.db.commit()
+        self.pintar_fila(i, r)
+        if i == 0:
+            self.render_ultima()
+
+    def on_color(self, sesion, data):
+        color = data.get("color")
+        if color not in COLORES:
+            return
+        i, r = self.fila_de_pieza(data.get("pieza_id"))
+        if r is None:
+            return
+        anterior = norm_color(color_final(r))
+        r["color_ia"] = color
+        r["color_ia_origen"] = data.get("origen")
+        self.db.execute(
+            "UPDATE clasificacion SET color_ia = ?, color_ia_origen = ? WHERE id = ?",
+            (r["color_ia"], r["color_ia_origen"], r["id"]))
+        self.db.commit()
+        if anterior != color:  # se corrige el conteo que hizo el color del ESP32
+            if anterior in self.conteos:
+                self.conteos[anterior] -= 1
+            self.conteos[color] += 1
+            self.render_conteos()
         self.pintar_fila(i, r)
         if i == 0:
             self.render_ultima()
@@ -398,7 +452,7 @@ def iniciar_mqtt(bus: Bus):
     def on_connect(c, _u, _f, rc, _p):
         bus.conexion.emit(not rc.is_failure)
         c.subscribe([("tapitas/clasificacion", 1), ("tapitas/imagen/+", 1),
-                     ("tapitas/veredicto_ia/+", 1)])
+                     ("tapitas/veredicto_ia/+", 1), ("tapitas/color_ia/+", 1)])
 
     def on_disconnect(_c, _u, _f, _rc, _p):
         bus.conexion.emit(False)
@@ -411,6 +465,8 @@ def iniciar_mqtt(bus: Bus):
                 bus.imagen.emit(msg.topic.split("/", 2)[2], bytes(msg.payload))
             elif msg.topic.startswith("tapitas/veredicto_ia/"):
                 bus.veredicto.emit(msg.topic.split("/", 2)[2], json.loads(msg.payload))
+            elif msg.topic.startswith("tapitas/color_ia/"):
+                bus.color.emit(msg.topic.split("/", 2)[2], json.loads(msg.payload))
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
             print(f"[app] mensaje invalido en {msg.topic}: {e}")
 

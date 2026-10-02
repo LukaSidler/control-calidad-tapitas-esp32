@@ -96,10 +96,10 @@ def es_dudoso(prob_rota: float) -> bool:
     confianza = prob_rota if prob_rota > UMBRAL_ROTA else (1 - prob_rota)
     return confianza < CONFIANZA_MINIMA_DUDOSO
 
-# Segunda opinion local por vision, solo para los casos dudosos -- corre en
-# la GPU de esta PC (Ollama), no tiene costo por token y no depende de
-# internet. Se publica aparte y de forma asincrona: NO bloquea el puente
-# serial mientras espera la respuesta del modelo.
+# Segunda opinion por vision, solo para los casos dudosos: Gemini por API
+# (ver mas abajo) u Ollama, que corre en la GPU de esta PC sin costo por
+# token ni internet. Se publica aparte y de forma asincrona: NO bloquea el
+# puente serial mientras espera la respuesta del modelo.
 OLLAMA_HOST = os.environ.get("TAPITAS_OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("TAPITAS_OLLAMA_MODEL", "qwen2.5vl:3b")
 # Cada modelo necesita su propia pregunta: con la de llava, qwen contesta NO
@@ -126,6 +126,23 @@ OLLAMA_PROMPT = next(
 # Recorte cuadrado centrado que se le manda a Ollama: la tapita ocupa
 # ~750px de alto en el frame de 1920x1080, el resto es fondo que confunde.
 OLLAMA_CROP = 820
+
+# Segunda opinion por API de Gemini (necesita internet y GEMINI_API_KEY en el
+# .env). Comparado sobre las mismas 52 fotos, con etiquetas revisadas a mano:
+#   gemini-3.1-flash-lite, foto ENTERA  rotas 26/26  sanas 25/26  ~3s
+#   gemini-3.1-flash-lite, recorte 820  rotas 26/26  sanas 22/26
+#   qwen2.5vl:3b local, recorte 820     rotas 22/26  sanas 21/26
+# A Gemini le va mejor con la foto entera (con el recorte confundia suciedad
+# y relieve con roturas), y subir el thinking no mejoro nada. Si Gemini falla
+# (sin internet, cuota, etc.) se usa Ollama local como respaldo.
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+GEMINI_MODEL = os.environ.get("TAPITAS_GEMINI_MODEL", "gemini-3.1-flash-lite")
+GEMINI_PROMPT = OLLAMA_PROMPTS["qwen"]
+# "gemini" (con Ollama de respaldo) u "ollama" (solo local, sin internet).
+TAPITAS_IA = os.environ.get("TAPITAS_IA", "gemini" if GEMINI_API_KEY else "ollama").lower()
+if TAPITAS_IA == "gemini" and not GEMINI_API_KEY:
+    print("[IA] TAPITAS_IA=gemini pero falta GEMINI_API_KEY en el .env -- uso solo Ollama")
+    TAPITAS_IA = "ollama"
 
 os.makedirs(SAVE_DIR, exist_ok=True)
 ser = serial.Serial(PORT, BAUD, timeout=2)
@@ -162,10 +179,33 @@ except Exception as e:
 pending_image_bytes = None
 
 
-def _pedir_veredicto_ia(sesion, img_bytes):
-    """Le pide a Ollama (corre local, GPU de esta PC) una segunda opinion
-    sobre una tapita dudosa, y publica el resultado. Corre en su propio hilo
-    -- si Ollama no esta levantado o tarda, no afecta el puente serial."""
+def _consultar_gemini(img_bytes):
+    """Manda la foto entera a Gemini y devuelve el texto de la respuesta."""
+    import urllib.request
+
+    req_body = json.dumps({
+        "contents": [{"parts": [
+            {"text": GEMINI_PROMPT},
+            {"inline_data": {"mime_type": "image/jpeg",
+                             "data": base64.b64encode(img_bytes).decode()}},
+        ]}],
+        "generationConfig": {
+            "temperature": 0,
+            "thinkingConfig": {"thinkingLevel": "minimal"},  # mas thinking no mejoro
+        },
+    }).encode()
+    req = urllib.request.Request(
+        f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
+        data=req_body,
+        headers={"Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY},
+    )
+    resp = json.loads(urllib.request.urlopen(req, timeout=30).read())
+    partes = resp["candidates"][0]["content"]["parts"]
+    return "".join(p.get("text", "") for p in partes if not p.get("thought")).strip()
+
+
+def _consultar_ollama(img_bytes):
+    """Manda el recorte central a Ollama (GPU local) y devuelve el texto."""
     import urllib.request
 
     img = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_COLOR)
@@ -175,35 +215,47 @@ def _pedir_veredicto_ia(sesion, img_bytes):
         img = img[(h - c) // 2:(h + c) // 2, (w - c) // 2:(w + c) // 2]
         img_bytes = cv2.imencode(".jpg", img)[1].tobytes()
 
-    b64 = base64.b64encode(img_bytes).decode()
     req_body = json.dumps({
         "model": OLLAMA_MODEL,
         "prompt": OLLAMA_PROMPT,
-        "images": [b64],
+        "images": [base64.b64encode(img_bytes).decode()],
         "stream": False,
         "keep_alive": "30m",             # que no descargue el modelo entre tapitas
         "options": {"temperature": 0},   # misma foto -> misma respuesta
     }).encode()
-    try:
-        req = urllib.request.Request(
-            f"{OLLAMA_HOST}/api/generate", data=req_body,
-            headers={"Content-Type": "application/json"},
-        )
-        resp = json.loads(urllib.request.urlopen(req, timeout=90).read())
-        texto = resp["response"].strip()
-    except Exception as e:
-        print(f"[IA] no pude consultar Ollama para sesion={sesion}: {e}")
-        return
+    req = urllib.request.Request(
+        f"{OLLAMA_HOST}/api/generate", data=req_body,
+        headers={"Content-Type": "application/json"},
+    )
+    return json.loads(urllib.request.urlopen(req, timeout=90).read())["response"].strip()
+
+
+def _pedir_veredicto_ia(sesion, img_bytes):
+    """Pide una segunda opinion sobre una tapita dudosa (Gemini, o Ollama
+    local si Gemini falla o no esta configurado) y publica el resultado.
+    Corre en su propio hilo -- si la IA tarda, no afecta el puente serial."""
+    texto, origen = None, None
+    if TAPITAS_IA == "gemini":
+        try:
+            texto, origen = _consultar_gemini(img_bytes), GEMINI_MODEL
+        except Exception as e:
+            print(f"[IA] Gemini fallo para sesion={sesion} ({e}) -- uso Ollama de respaldo")
+    if texto is None:
+        try:
+            texto, origen = _consultar_ollama(img_bytes), OLLAMA_MODEL
+        except Exception as e:
+            print(f"[IA] no pude consultar Ollama para sesion={sesion}: {e}")
+            return
 
     primera_palabra = texto.split()[0].upper().strip(":,.!*") if texto else ""
     if primera_palabra.startswith(("NO", "INTACT")):
         veredicto = "sana"
-        razon = "sin agujeros ni grietas visibles"
+        razon = f"sin agujeros ni grietas visibles ({origen})"
     elif primera_palabra.startswith(("YES", "SI", "DAMAGED")):
         veredicto = "rota"
-        razon = "agujero o grieta visible"
+        razon = f"agujero o grieta visible ({origen})"
     else:
-        print(f"[IA] respuesta ambigua de Ollama, descartada: {texto!r}")
+        print(f"[IA] respuesta ambigua de {origen}, descartada: {texto!r}")
         return
 
     topic = f"tapitas/veredicto_ia/{sesion}"
@@ -235,7 +287,7 @@ def handle_mqttdata_line(line):
         if isinstance(prob_rota, (int, float)) and es_dudoso(prob_rota):
             sesion_ia = data.get("sesion_id") or "_sin_sesion"
             print(f"[IA] tapita dudosa (prob_rota={prob_rota:.4f}, sesion={sesion_ia}) "
-                  f"-- consultando Ollama ({OLLAMA_MODEL})...")
+                  f"-- consultando {GEMINI_MODEL if TAPITAS_IA == 'gemini' else OLLAMA_MODEL}...")
             threading.Thread(
                 target=_pedir_veredicto_ia, args=(sesion_ia, img_bytes), daemon=True,
             ).start()

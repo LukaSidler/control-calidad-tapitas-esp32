@@ -152,7 +152,9 @@ if TAPITAS_IA == "gemini" and not GEMINI_API_KEY:
 # El color del ESP32 queda como valor inmediato y de respaldo.
 # Va con el recorte central; avisar que "corrija la dominante de luz" hacia
 # que las azules salieran blancas. TAPITAS_COLOR_IA=0 lo desactiva.
-COLOR_IA = os.environ.get("TAPITAS_COLOR_IA", "1") != "0"
+# Solo Gemini: qwen2.5vl:3b acerto ~66% (rojo->naranja, azul->blanco...),
+# peor que el ESP32, asi que sin Gemini se deja el color del ESP32.
+COLOR_IA = os.environ.get("TAPITAS_COLOR_IA", "1") != "0" and TAPITAS_IA == "gemini"
 COLOR_PROMPT = (
     "What color is the bottle cap? Off-white, cream or ivory caps count as "
     "WHITE; only saturated yellow counts as YELLOW. Reply with only one word: "
@@ -295,11 +297,12 @@ def _pedir_veredicto_ia(sesion, pieza_id, img_bytes):
 
 
 def _pedir_color_ia(sesion, pieza_id, img_bytes, color_esp32):
-    """Pide el color de la tapita a la IA y lo publica. Corre en su propio hilo."""
-    recorte = _recorte_central(img_bytes)
-    texto, origen = _preguntar_ia("color", sesion, recorte, img_bytes,
-                                  COLOR_PROMPT, COLOR_PROMPT)
-    if texto is None:
+    """Pide el color de la tapita a Gemini y lo publica. Corre en su propio
+    hilo. Si Gemini falla, queda el color del ESP32 (sin respaldo de Ollama)."""
+    try:
+        texto, origen = _consultar_gemini(_recorte_central(img_bytes), COLOR_PROMPT), GEMINI_MODEL
+    except Exception as e:
+        print(f"[IA] Gemini fallo (color, sesion={sesion}): {e} -- queda el color del ESP32")
         return
     palabra = texto.split()[0].upper().strip(":,.!*") if texto else ""
     color = COLORES_IA.get(palabra)

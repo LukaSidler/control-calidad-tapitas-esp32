@@ -29,6 +29,7 @@ escribas se manda tal cual por serial a la placa.
 """
 import serial
 import glob
+import re
 import time
 import threading
 import zlib
@@ -76,7 +77,7 @@ except KeyError:
         "esto el puente MQTT hablaria con un host adivinado y las "
         "clasificaciones no le llegarian a nadie sin ningun aviso."
     )
-MQTT_BROKER_PORT = 1883
+MQTT_BROKER_PORT = int(os.environ.get("TAPITAS_MQTT_PORT", "1883"))
 MQTT_TOPIC_CLASIFICACION = "tapitas/clasificacion"
 
 # Debe coincidir con SAMPLE_WINDOW del firmware (imx708_snapshot_main.c).
@@ -178,9 +179,10 @@ ser = None
 
 def _buscar_puerto():
     """PORT si existe; si no, el primer /dev/ttyACM* (al reenchufar, Linux
-    a veces le da ACM1 mientras el ACM0 viejo no se libero)."""
-    if os.path.exists(PORT):
-        return PORT
+    a veces le da ACM1 mientras el ACM0 viejo no se libero). Con
+    TAPITAS_SERIAL_PORT puesto se usa solo ese, sin buscar otro."""
+    if os.path.exists(PORT) or "TAPITAS_SERIAL_PORT" in os.environ:
+        return PORT if os.path.exists(PORT) else None
     candidatos = sorted(glob.glob("/dev/ttyACM*"))
     return candidatos[0] if candidatos else None
 
@@ -192,7 +194,9 @@ def _abrir_serial():
         puerto = _buscar_puerto()
         if puerto:
             try:
-                s = serial.Serial(puerto, BAUD, timeout=2)
+                # exclusive: si otro programa ya tiene la placa, no compartirla
+                # (los dos se robarian bytes y las fotos llegarian cortadas).
+                s = serial.Serial(puerto, BAUD, timeout=2, exclusive=True)
                 print(f"[serial] ESP32 conectado en {puerto} a {BAUD} baudios.")
                 return s
             except (serial.SerialException, OSError) as e:
@@ -209,11 +213,174 @@ def _abrir_serial():
 mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="ver_imx708-puente")
 
 
+# ---------- Planta: estado, eventos y mandos para el SCADA -----------------
+# El firmware no tiene un comando para consultar su estado, asi que el puente
+# lo deduce de los logs que ya imprime (CINTA, DISPARO AUTOMATICO, SENSOR
+# IR...) y lo publica retenido: un SCADA que se conecte tarde lo recibe
+# igual. Los mandos llegan por MQTT y se traducen a las teclas de siempre.
+TOPIC_PUENTE = "tapitas/puente/estado"          # "online" / "offline" (last will)
+TOPIC_PLANTA_ESTADO = "tapitas/planta/estado"    # JSON retenido
+TOPIC_PLANTA_EVENTO = "tapitas/planta/evento"    # JSON: ir, captura, reinicio
+TOPIC_PLANTA_LOG = "tapitas/planta/log"          # lineas de log del ESP32
+TOPIC_PLANTA_COMANDO = "tapitas/planta/comando"  # JSON {"cmd": ...}
+
+# s_trigger_delay_ms del firmware al bootear (el log lo confirma con 'a').
+DELAY_DISPARO_FABRICA_MS = 4200
+
+# auto=None: no se sabe (el puente arranco con la placa ya andando, o se
+# reconecto sin ver el boot). 'a' es un toggle, ver _ejecutar_comando.
+planta = {
+    "esp32": False, "cinta": False, "auto": None, "streaming": False,
+    "delay_ms": DELAY_DISPARO_FABRICA_MS, "red_gain": None, "blue_gain": None,
+    "exposicion_us": None, "detecciones": 0,
+}
+_planta_lock = threading.Lock()
+_auto_deseado = None   # ON/OFF pedido por el SCADA, hasta que el log lo confirme
+_cinta_deseada = None  # para re-frenar si la parada cayo durante una captura
+
+# Mandos del SCADA -> teclas del firmware. "auto_on"/"auto_off", "marcha",
+# "parada" y "raw" se resuelven aparte en _ejecutar_comando.
+COMANDOS_PLANTA = {
+    "cinta_on": "g", "cinta_off": "s", "foto": "i",
+    "azul_menos": "b", "azul_mas": "B", "rojo_menos": "r", "rojo_mas": "R",
+    "exposicion_menos": "1", "exposicion_mas": "2",
+    "retardo_menos": "y", "retardo_mas": "Y",
+}
+
+_ser_lock = threading.Lock()
+
+
+def mandar_serial(texto):
+    """Manda un comando al ESP32. False si no esta conectado."""
+    with _ser_lock:
+        if ser is None:
+            return False
+        try:
+            ser.write((texto + "\n").encode())
+            return True
+        except (serial.SerialException, OSError) as e:
+            # El hilo lector se entera solo y reabre el puerto.
+            print(f"[serial] no pude mandar '{texto}', ESP32 desconectado: {e}")
+            return False
+
+
+def publicar_planta():
+    with _planta_lock:
+        estado = dict(planta)
+    mqtt_client.publish(TOPIC_PLANTA_ESTADO, json.dumps(estado), qos=1, retain=True)
+
+
+def set_planta(**cambios):
+    with _planta_lock:
+        cambio = any(planta.get(k) != v for k, v in cambios.items())
+        planta.update(cambios)
+    if cambio:
+        publicar_planta()
+
+
+def publicar_evento(tipo, **datos):
+    mqtt_client.publish(TOPIC_PLANTA_EVENTO, json.dumps({"tipo": tipo, **datos}), qos=0)
+
+
+_RE_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+_RE_IR = re.compile(r"SENSOR IR: deteccion #(\d+)")
+_RE_DISPARO = re.compile(r"Disparo automatico #(\d+)")
+_RE_AUTO = re.compile(r"DISPARO AUTOMATICO: (ON|OFF) \(delay actual (\d+)ms\)")
+_RE_GANANCIAS = re.compile(r"red_gain=([\d.]+) blue_gain=([\d.]+)")
+_RE_LISTO = re.compile(r"exposicion=(\d+)us .*wb=([\d.]+)/([\d.]+)")
+_RE_EXPOSICION = re.compile(r"EXPOSICION FIJA en (\d+)us")
+_RE_DELAY = re.compile(r"Delay de disparo: (\d+)ms")
+
+
+def actualizar_planta_por_log(line):
+    """Publica la linea de log y actualiza el estado de la planta si dice algo
+    que importe (la cinta arranco, el sensor detecto, etc.)."""
+    global _auto_deseado, _cinta_deseada
+    txt = _RE_ANSI.sub("", line)
+    mqtt_client.publish(TOPIC_PLANTA_LOG, txt, qos=0)
+
+    if "SISTEMA LISTO SIN INTERVENCION" in txt:
+        # Boot (o RST) de la placa: todo vuelve a los valores de fabrica.
+        _auto_deseado = _cinta_deseada = None
+        set_planta(cinta=False, auto=False, streaming=False, detecciones=0,
+                   delay_ms=DELAY_DISPARO_FABRICA_MS)
+        publicar_evento("reinicio")
+    elif (m := _RE_LISTO.search(txt)):
+        set_planta(exposicion_us=int(m.group(1)), red_gain=float(m.group(2)),
+                   blue_gain=float(m.group(3)))
+    elif "CINTA: arrancando" in txt:
+        set_planta(cinta=True)
+    elif "CINTA: parada" in txt:
+        set_planta(cinta=False)
+    elif "STREAMING ON" in txt:
+        set_planta(streaming=True)
+    elif "STREAMING OFF" in txt:
+        set_planta(streaming=False)
+    elif (m := _RE_AUTO.search(txt)):
+        activo = m.group(1) == "ON"
+        set_planta(auto=activo, delay_ms=int(m.group(2)))
+        if _auto_deseado is not None and _auto_deseado != activo:
+            mandar_serial("a")  # estaba al reves de lo que se creia: un toggle mas
+        _auto_deseado = None
+    elif (m := _RE_IR.search(txt)):
+        set_planta(detecciones=int(m.group(1)))
+        publicar_evento("ir", n=int(m.group(1)))
+    elif (m := _RE_DISPARO.search(txt)):
+        publicar_evento("captura", n=int(m.group(1)))
+    elif (m := _RE_EXPOSICION.search(txt)):
+        set_planta(exposicion_us=int(m.group(1)))
+    elif (m := _RE_DELAY.search(txt)):
+        set_planta(delay_ms=int(m.group(1)))
+    elif (m := _RE_GANANCIAS.search(txt)):
+        set_planta(red_gain=float(m.group(1)), blue_gain=float(m.group(2)))
+
+
+def _ejecutar_comando(cmd, texto=""):
+    global _auto_deseado, _cinta_deseada
+    if cmd == "marcha":
+        return _ejecutar_comando("cinta_on") and _ejecutar_comando("auto_on")
+    if cmd == "parada":
+        return _ejecutar_comando("cinta_off") and _ejecutar_comando("auto_off")
+    if cmd in ("auto_on", "auto_off"):
+        deseado = cmd == "auto_on"
+        if planta["auto"] == deseado:
+            return True
+        _auto_deseado = deseado
+        return mandar_serial("a")
+    if cmd == "raw":
+        texto = texto.strip()
+        if not texto or len(texto) > 20 or not texto.isprintable():
+            return False
+        return mandar_serial(texto)
+    tecla = COMANDOS_PLANTA.get(cmd)
+    if tecla is None:
+        print(f"[SCADA] comando desconocido: {cmd!r}")
+        return False
+    if cmd in ("cinta_on", "cinta_off"):
+        _cinta_deseada = cmd == "cinta_on"
+    return mandar_serial(tecla)
+
+
+def on_mqtt_message(client, userdata, msg):
+    try:
+        data = json.loads(msg.payload)
+        cmd = data["cmd"]
+    except (json.JSONDecodeError, UnicodeDecodeError, KeyError, TypeError):
+        print(f"[SCADA] comando invalido: {msg.payload[:80]!r}")
+        return
+    ok = _ejecutar_comando(cmd, str(data.get("texto", "")))
+    print(f"[SCADA] comando '{cmd}'{' ' + data['texto'] if cmd == 'raw' else ''}"
+          f"{'' if ok else ' -- NO se pudo mandar (ESP32 desconectado?)'}")
+
+
 def on_mqtt_connect(client, userdata, flags, reason_code, properties):
     if reason_code.is_failure:
         print(f"[MQTT] conexion rechazada: {reason_code}")
     else:
         print(f"[MQTT] conectado al broker {MQTT_BROKER_HOST}:{MQTT_BROKER_PORT}")
+        client.publish(TOPIC_PUENTE, "online", qos=1, retain=True)
+        publicar_planta()
+        client.subscribe(TOPIC_PLANTA_COMANDO, qos=1)
 
 
 def on_mqtt_disconnect(client, userdata, flags, reason_code, properties):
@@ -222,6 +389,9 @@ def on_mqtt_disconnect(client, userdata, flags, reason_code, properties):
 
 mqtt_client.on_connect = on_mqtt_connect
 mqtt_client.on_disconnect = on_mqtt_disconnect
+mqtt_client.on_message = on_mqtt_message
+# Si este script se cierra o se cuelga, el broker avisa solo al SCADA.
+mqtt_client.will_set(TOPIC_PUENTE, "offline", qos=1, retain=True)
 mqtt_client.reconnect_delay_set(min_delay=1, max_delay=30)
 try:
     mqtt_client.connect_async(MQTT_BROKER_HOST, MQTT_BROKER_PORT, keepalive=30)
@@ -368,6 +538,10 @@ def handle_mqttdata_line(line):
     data["pieza_id"] = pieza_id
     mqtt_client.publish(MQTT_TOPIC_CLASIFICACION, json.dumps(data), qos=1)
     print(f"[MQTT] publicado: {data}")
+    if _cinta_deseada is False:
+        # Una parada que cayo mientras se sacaba la foto: el firmware retoma
+        # la cinta al terminar la captura, asi que se la vuelve a frenar.
+        mandar_serial("s")
 
     img_bytes = pending_image_bytes
     if img_bytes is not None:
@@ -516,6 +690,10 @@ def serial_reader():
     while True:
         if ser is None:
             ser = _abrir_serial()
+            set_planta(esp32=True)
+            # Si la placa ya estaba andando no vemos su boot: 'p' (solo lee)
+            # hace que imprima las ganancias de color actuales.
+            mandar_serial("p")
 
         try:
             line = ser.readline().decode(errors="ignore").rstrip("\r\n")
@@ -535,15 +713,20 @@ def serial_reader():
             # Cable USB desenchufado (o la placa se reinicio y el puerto
             # desaparecio): cerrar y volver a esperarlo.
             print(f"[serial] se perdio la conexion con el ESP32: {e}")
-            try:
-                ser.close()
-            except Exception:
-                pass
-            ser = None
+            with _ser_lock:
+                try:
+                    ser.close()
+                except Exception:
+                    pass
+                ser = None
+            # Desenchufada la placa se apaga: la cinta para sola. Si vuelve sin
+            # que veamos el boot, el disparo automatico queda "no se sabe".
+            set_planta(esp32=False, cinta=False, auto=None, streaming=False)
             continue
 
         # Cualquier otra línea es log normal del ESP32 (incluye el resultado de color)
         print(line)
+        actualizar_planta_por_log(line)
 
 
 threading.Thread(target=serial_reader, daemon=True).start()
@@ -558,7 +741,12 @@ print(f"Clasificacion (color + prob_rota) puenteada por MQTT a {MQTT_BROKER_HOST
       f"topico '{MQTT_TOPIC_CLASIFICACION}'.\n")
 
 while True:
-    cmd = input().strip()
+    try:
+        cmd = input().strip()
+    except EOFError:
+        # Sin terminal (lanzado de fondo): sigue andando como puente y los
+        # comandos llegan desde el SCADA. Se corta con Ctrl+C / kill.
+        threading.Event().wait()
     low = cmd.lower()
 
     if low == "salir":
@@ -575,14 +763,13 @@ while True:
         print("[dataset] modo apagado")
         continue
 
-    if ser is None:
+    if not mandar_serial(cmd):
         print("[serial] ESP32 desconectado, el comando no se mando")
-        continue
-    try:
-        ser.write((cmd + "\n").encode())
-    except (serial.SerialException, OSError) as e:
-        # El hilo lector se entera solo y reabre el puerto.
-        print(f"[serial] no pude mandar el comando, ESP32 desconectado: {e}")
 
 cv2.destroyAllWindows()
+# Salida prolija: el last will solo salta si el script se cae.
+try:
+    mqtt_client.publish(TOPIC_PUENTE, "offline", qos=1, retain=True).wait_for_publish(2)
+except (RuntimeError, ValueError):
+    pass  # sin broker: no hay a quien avisar
 mqtt_client.loop_stop()

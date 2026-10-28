@@ -27,6 +27,7 @@ control-calidad-tapitas-esp32/
 │   ├── NOTAS_WIFI_HOSTED.md    # Bug de WiFi ESP32-P4+C6 (esp-hosted-mcu) y por qué no se usa
 │   ├── ver_imx708.py           # Visor en vivo por serial (logs + cámara) + puente a MQTT
 │   ├── app_tapitas.py          # App de escritorio (PyQt6): tapitas en vivo, conteos e historial
+│   ├── scada_tapitas.py        # SCADA (PyQt6): sinóptico de la maqueta, mandos y alarmas
 │   └── requirements.txt        # Deps de ver_imx708.py
 ├── modelo/                     # Entrenamiento, conversión y evaluación del modelo TinyML
 ├── dataset/                    # README + fotos de ejemplo (el dataset completo vive fuera del repo)
@@ -74,10 +75,34 @@ El broker MQTT se elige con `TAPITAS_MQTT_HOST` en
   python ver_imx708.py   # en una terminal
   python app_tapitas.py  # en otra
   ```
+  En vez de `app_tapitas.py` se puede abrir `python scada_tapitas.py` (no las
+  dos a la vez: comparten la base local).
 - **Con Raspberry Pi**: `TAPITAS_MQTT_HOST=<ip-de-la-raspberry>`. Suma la
   base de datos y el dashboard web de la Pi
   ([`raspberry/README.md`](raspberry/README.md)); la app de escritorio
   sigue andando igual.
+
+## SCADA
+
+`scada_tapitas.py` es la pantalla de operador:
+
+- **Planta**: sinóptico animado de la maqueta (sensor IR, cinta, túnel con
+  cámara, motor), MARCHA/PARADA, mandos manuales y ajustes de color,
+  exposición y retardo, totales y registro de eventos y alarmas.
+- **Producción**: la misma vista de `app_tapitas.py`.
+- **Consola ESP32**: logs en vivo y comandos sueltos.
+
+`ver_imx708.py` queda corriendo como puente serial (y consola de
+diagnóstico). Deduce el estado de la planta de los logs del ESP32 y lo
+publica; los mandos del SCADA los traduce a las teclas del firmware.
+
+| Tópico | Contenido |
+|---|---|
+| `tapitas/puente/estado` | `online` / `offline` (retenido, last will del puente) |
+| `tapitas/planta/estado` | JSON retenido: `esp32`, `cinta`, `auto`, `delay_ms`, ganancias, exposición, `detecciones` |
+| `tapitas/planta/evento` | JSON: `ir`, `captura`, `reinicio` |
+| `tapitas/planta/log` | Líneas de log del ESP32 |
+| `tapitas/planta/comando` | JSON `{"cmd": ...}`: `marcha`, `parada`, `cinta_on`, `auto_on`, `foto`, `azul_menos`, `raw`... |
 
 ## Modelo TinyML: métricas
 

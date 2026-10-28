@@ -1,0 +1,29 @@
+digraph firmware {
+  graph [rankdir=TB, fontname="Helvetica", bgcolor="white", pad=0.3, nodesep=0.35, ranksep=0.32,
+         label="Firmware del ESP32-P4 (imx708_snapshot_main.c)", labelloc=t, fontsize=20];
+  node  [fontname="Helvetica", fontsize=12, shape=box, style="rounded,filled", fillcolor="#eef3f8", color="#5b7083"];
+  edge  [fontname="Helvetica", fontsize=10, color="#5b7083"];
+
+  inicio [label="Encendido", shape=oval, fillcolor="#fff7e6", color="#e0a030"];
+  boot   [label="app_main(): preparar todo\n• abrir la cámara\n• cargar el modelo TinyML\n• exposición, foco y balance de blancos fijos\n• crear las tareas (FreeRTOS)"];
+  tareas [label="Quedan corriendo en paralelo:\n• belt_task: mueve el motor si la cinta está en marcha\n• ir_sensor_task: vigila el sensor IR\n• capture_trigger_task: espera disparos\n• bucle principal: lee comandos por serial", fillcolor="#fff7e6", color="#e0a030"];
+
+  espera [label="Cinta en marcha\n(esperando tapita)", shape=oval];
+  ir     [label="¿El sensor IR detecta algo\ndurante más de 30 ms?", shape=diamond, fillcolor="white"];
+  auto   [label="¿Disparo automático\nprendido?", shape=diamond, fillcolor="white"];
+  viaje  [label="Esperar el retardo de disparo (4,2 s)\nmientras la tapita viaja hasta la cámara"];
+  frenar [label="Frenar la cinta y esperar 200 ms\n(que no tiemble la foto)"];
+  foto   [label="Sacar la foto\n(descarta 4 cuadros viejos)"];
+  color  [label="Color: promedio del centro 300×300 px\n→ HSV → naranja/rojo/amarillo/azul/lila/blanco"];
+  ml     [label="TinyML: recorte 1120 px → 128×128 gris\n→ red neuronal → prob_rota (0 a 1)"];
+  envio  [label="Mandar por serial:\n1) la foto JPEG (IMGSTART … CRC32 … IMGEND)\n2) MQTTDATA {color, hue, prob_rota, sesion_id}"];
+  seguir [label="Volver a arrancar la cinta"];
+
+  inicio -> boot -> tareas -> espera -> ir;
+  ir -> espera [label="no / parpadeo"];
+  ir -> auto   [label="sí: cuenta una tapita"];
+  auto -> espera [label="no (solo la cuenta)", constraint=false];
+  auto -> viaje  [label="sí"];
+  viaje -> frenar -> foto -> color -> ml -> envio -> seguir;
+  seguir -> espera [constraint=false, tailport=e, headport=e, label="  siguiente tapita"];
+}

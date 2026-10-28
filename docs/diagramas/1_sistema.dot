@@ -1,0 +1,40 @@
+digraph sistema {
+  graph [rankdir=LR, fontname="Helvetica", bgcolor="white", pad=0.3, nodesep=0.45, ranksep=0.7,
+         label="Sistema completo: de la tapita a la pantalla", labelloc=t, fontsize=20];
+  node  [fontname="Helvetica", fontsize=12, shape=box, style="rounded,filled", fillcolor="#eef3f8", color="#5b7083"];
+  edge  [fontname="Helvetica", fontsize=10, color="#5b7083"];
+
+  subgraph cluster_maqueta {
+    label="Maqueta (hardware)"; style="rounded,dashed"; color="#9aa7b4"; fontsize=13;
+    ir     [label="Sensor IR\nFC-51"];
+    motor  [label="Motor PAP\n+ driver TB6600"];
+    cam    [label="Cámara\nIMX708 + LEDs"];
+  }
+
+  subgraph cluster_esp {
+    label="ESP32-P4  ·  imx708_snapshot_main.c"; style="rounded,filled"; fillcolor="#fff7e6"; color="#e0a030"; fontsize=13;
+    fw [label="Firmware\n• controla la cinta\n• detecta la tapita\n• saca la foto\n• color (HSV)\n• rota/sana (TinyML)", fillcolor="white", color="#e0a030"];
+  }
+
+  subgraph cluster_pc {
+    label="PC"; style="rounded,filled"; fillcolor="#eaf7ef"; color="#35a46a"; fontsize=13;
+    puente [label="ver_imx708.py\n(puente)\n• lee el serial\n• publica por MQTT\n• pide ayuda a la IA\n• traduce los mandos", fillcolor="white", color="#35a46a"];
+    broker [label="Broker MQTT\n(Mosquitto)", shape=cylinder, fillcolor="white", color="#35a46a"];
+    scada  [label="scada_tapitas.py\n(pantalla del operador)\nsinóptico · mandos\nalarmas · historial", fillcolor="white", color="#35a46a"];
+    db     [label="Base SQLite\nlocal", shape=cylinder, fillcolor="white", color="#35a46a"];
+  }
+
+  ia [label="IA en la nube / local\nGemini (color + rotura)\nOllama (respaldo)", fillcolor="#f3eefa", color="#8a6bbf"];
+
+  ir    -> fw    [label="GPIO 22\n(interrupción)"];
+  fw    -> motor [label="GPIO 26/54\npulsos STEP/DIR"];
+  cam   -> fw    [label="MIPI-CSI\n1920×1080"];
+  fw    -> puente [label="USB serial 2 Mbaud\nlogs + foto JPEG + MQTTDATA", penwidth=2];
+  puente -> fw   [label="teclas de mando\n(g, s, a, b...)", style=dashed];
+  puente -> broker [label="publica", penwidth=2];
+  broker -> scada [label="suscribe", penwidth=2];
+  scada -> broker [label="mandos", style=dashed];
+  broker -> puente [label="mandos", style=dashed];
+  scada -> db;
+  puente -> ia [label="foto", dir=both, arrowtail=normal];
+}

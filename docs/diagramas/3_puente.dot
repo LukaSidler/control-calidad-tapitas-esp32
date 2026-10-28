@@ -1,0 +1,34 @@
+digraph puente {
+  graph [rankdir=TB, fontname="Helvetica", bgcolor="white", pad=0.3, nodesep=0.35, ranksep=0.32,
+         label="Puente en la PC (ver_imx708.py)", labelloc=t, fontsize=20];
+  node  [fontname="Helvetica", fontsize=12, shape=box, style="rounded,filled", fillcolor="#eef3f8", color="#5b7083"];
+  edge  [fontname="Helvetica", fontsize=10, color="#5b7083"];
+
+  inicio  [label="Arranque", shape=oval, fillcolor="#eaf7ef", color="#35a46a"];
+  mqtt    [label="Conectar al broker MQTT\n(reconecta solo si se cae)"];
+  abrir   [label="¿Está el ESP32\nenchufado?", shape=diamond, fillcolor="white"];
+  esperar [label="Avisar «ESP32 desconectado»\ny reintentar cada 2 s"];
+  leer    [label="Leer una línea del serial"];
+  corte   [label="¿Se cortó el USB?", shape=diamond, fillcolor="white"];
+  tipo    [label="¿Qué llegó?", shape=diamond, fillcolor="white"];
+  img     [label="Foto: recibir los bytes,\nverificar el CRC32\ny guardarla"];
+  data    [label="MQTTDATA: ponerle un pieza_id\ny publicar la clasificación + la foto"];
+  ia      [label="En otro hilo, preguntar a Gemini:\n• el color (siempre)\n• ¿está rota? (solo si es dudosa)\ny publicar la respuesta"];
+  log     [label="Log: mostrarlo, publicarlo y\nactualizar el estado de la planta\n(cinta, sensor IR, disparo…)"];
+  mando   [label="En paralelo: mando del SCADA\npor MQTT (ej. MARCHA → «g» + «a»)", fillcolor="#eaf7ef", color="#35a46a"];
+  serial  [label="Escribir la tecla\nen el serial del ESP32"];
+
+  inicio -> mqtt -> abrir;
+  abrir -> esperar [label="no"];
+  esperar -> abrir;
+  abrir -> leer [label="sí"];
+  leer -> corte;
+  corte -> esperar [label="sí"];
+  corte -> tipo [label="no"];
+  tipo -> img  [label="IMGSTART"];
+  tipo -> data [label="MQTTDATA"];
+  tipo -> log  [label="otra línea"];
+  data -> ia;
+  img -> leer; log -> leer; ia -> leer [style=dashed, label="sin esperar"];
+  mando -> serial;
+}

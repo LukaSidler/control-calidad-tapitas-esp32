@@ -26,6 +26,7 @@ control-calidad-tapitas-esp32/
 │   ├── NOTAS_TINYML.md         # Detalle de la integración del modelo y el bug de esp-nn
 │   ├── NOTAS_WIFI_HOSTED.md    # Bug de WiFi ESP32-P4+C6 (esp-hosted-mcu) y por qué no se usa
 │   ├── ver_imx708.py           # Visor en vivo por serial (logs + cámara) + puente a MQTT
+│   ├── app_tapitas.py          # App de escritorio (PyQt6): tapitas en vivo, conteos e historial
 │   └── requirements.txt        # Deps de ver_imx708.py
 ├── modelo/                     # Entrenamiento, conversión y evaluación del modelo TinyML
 ├── dataset/                    # README + fotos de ejemplo (el dataset completo vive fuera del repo)
@@ -54,6 +55,30 @@ pip install -r requirements.txt
 python ver_imx708.py
 ```
 
+Si el ESP32 no está enchufado al arrancar, o se desenchufa andando, el script
+avisa y espera: cuando la placa vuelve, sigue solo sin reiniciarlo. Lo mismo
+con el broker MQTT. Al reenchufar, la placa arranca con los valores de
+fábrica (hay que volver a activar el disparo automático con `a`).
+
+## Modo local (por defecto) o con Raspberry Pi
+
+El broker MQTT se elige con `TAPITAS_MQTT_HOST` en
+`firmware/imx708_snapshot/.env` (ver `.env.example`):
+
+- **Local**: `TAPITAS_MQTT_HOST=localhost`. Mosquitto corre en la misma PC
+  y la app de escritorio (`app_tapitas.py`) guarda todo en su propia base
+  SQLite. No hace falta red ni Raspberry: es el modo para llevar la maqueta.
+  ```sh
+  sudo apt install mosquitto
+  sudo systemctl enable --now mosquitto
+  python ver_imx708.py   # en una terminal
+  python app_tapitas.py  # en otra
+  ```
+- **Con Raspberry Pi**: `TAPITAS_MQTT_HOST=<ip-de-la-raspberry>`. Suma la
+  base de datos y el dashboard web de la Pi
+  ([`raspberry/README.md`](raspberry/README.md)); la app de escritorio
+  sigue andando igual.
+
 ## Modelo TinyML: métricas
 
 Evaluado sobre el test set (44 imágenes: 21 sana / 23 rota):
@@ -75,8 +100,8 @@ poco más de falsos positivos (88% de precisión). Detalle completo en
 
 El firmware manda `prob_rota` crudo (sin umbralizar) por el puente serial
 hacia la PC (ver más abajo por qué no se manda por MQTT/WiFi directo desde
-el ESP32), para poder ajustar este umbral del lado de la Raspberry Pi sin
-reflashear el ESP32.
+el ESP32), para poder ajustar este umbral (`TAPITAS_UMBRAL_ROTA`) en la app
+o en la Raspberry Pi sin reflashear el ESP32.
 
 ## Bug de esp-nn en ESP32-P4
 
@@ -101,7 +126,8 @@ donde documentamos el diagnóstico en detalle.
 
 **Por eso este proyecto no usa WiFi/MQTT directo desde el ESP32**: la
 clasificación viaja por el mismo cable serial que las imágenes hasta una
-PC (`ver_imx708.py`), que es quien publica por MQTT hacia la Raspberry Pi.
+PC (`ver_imx708.py`), que es quien publica por MQTT (al broker local o al
+de la Raspberry Pi).
 Si se quiere usar WiFi directo desde el ESP32 en el futuro, revisar
 primero el estado de ese issue. Detalle completo en
 [`firmware/imx708_snapshot/NOTAS_WIFI_HOSTED.md`](firmware/imx708_snapshot/NOTAS_WIFI_HOSTED.md).
@@ -110,8 +136,10 @@ primero el estado de ese issue. Detalle completo en
 
 - ✅ Clasificación de color (HSV) y estado (sana/rota) funcionando en el
   ESP32-P4, validadas en banco de pruebas.
-- ✅ Integración con Raspberry Pi: ingesta MQTT, base de datos y dashboard
-  web en vivo — ver [`raspberry/README.md`](raspberry/README.md).
+- ✅ Modo local con la app de escritorio (`app_tapitas.py`): sin red ni
+  Raspberry, tolera desconectar y reconectar el ESP32 y el broker.
+- ✅ Integración opcional con Raspberry Pi: ingesta MQTT, base de datos y
+  dashboard web en vivo — ver [`raspberry/README.md`](raspberry/README.md).
 - ✅ Segunda opinión por IA (`ver_imx708.py`): Gemini decide el color de
   cada tapita (incluido rosa) y revisa las dudosas, con Ollama local de
   respaldo para la rotura.

@@ -28,6 +28,8 @@ el modo dataset (cada foto que saques cae sola en esa carpeta, numerada),
 escribas se manda tal cual por serial a la placa.
 """
 import serial
+import glob
+import time
 import threading
 import zlib
 import os
@@ -43,8 +45,9 @@ from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
-PORT = "/dev/ttyACM0"
+PORT = os.environ.get("TAPITAS_SERIAL_PORT", "/dev/ttyACM0")
 BAUD = 2000000
+SERIAL_REINTENTO_S = 2
 SAVE_DIR = os.path.expanduser("~/Documentos/capturas_imx708")
 
 # Modo dataset: escribiendo "rota" o "sana" en la terminal, cada foto que
@@ -166,7 +169,40 @@ COLORES_IA = {
 }
 
 os.makedirs(SAVE_DIR, exist_ok=True)
-ser = serial.Serial(PORT, BAUD, timeout=2)
+
+# El puerto se abre (y se reabre) desde el hilo lector: si el ESP32 no esta
+# enchufado o se desenchufa andando, el script espera y sigue solo cuando
+# vuelve, sin tener que reiniciarlo.
+ser = None
+
+
+def _buscar_puerto():
+    """PORT si existe; si no, el primer /dev/ttyACM* (al reenchufar, Linux
+    a veces le da ACM1 mientras el ACM0 viejo no se libero)."""
+    if os.path.exists(PORT):
+        return PORT
+    candidatos = sorted(glob.glob("/dev/ttyACM*"))
+    return candidatos[0] if candidatos else None
+
+
+def _abrir_serial():
+    """Bloquea hasta poder abrir el puerto del ESP32."""
+    avisado = False
+    while True:
+        puerto = _buscar_puerto()
+        if puerto:
+            try:
+                s = serial.Serial(puerto, BAUD, timeout=2)
+                print(f"[serial] ESP32 conectado en {puerto} a {BAUD} baudios.")
+                return s
+            except (serial.SerialException, OSError) as e:
+                if not avisado:
+                    print(f"[serial] no pude abrir {puerto}: {e}")
+        if not avisado:
+            print(f"[serial] ESP32 desconectado, esperando a que se enchufe "
+                  f"(reintento cada {SERIAL_REINTENTO_S} s)...")
+            avisado = True
+        time.sleep(SERIAL_REINTENTO_S)
 
 # Cliente MQTT hacia la Raspberry. loop_start() corre en su propio hilo y
 # reconecta solo si el broker se cae -- no bloquea la lectura del serial.
@@ -476,23 +512,34 @@ def handle_image(header):
 
 
 def serial_reader():
+    global ser
     while True:
+        if ser is None:
+            ser = _abrir_serial()
+
         try:
             line = ser.readline().decode(errors="ignore").rstrip("\r\n")
-        except Exception as e:
-            print(f"[error de lectura serial: {e}]")
-            continue
 
-        if not line:
-            continue
+            if not line:
+                continue
 
-        if line.startswith("IMGSTART"):
-            header = parse_header(line)
-            handle_image(header)
-            continue
+            if line.startswith("IMGSTART"):
+                header = parse_header(line)
+                handle_image(header)
+                continue
 
-        if line.startswith("MQTTDATA "):
-            handle_mqttdata_line(line)
+            if line.startswith("MQTTDATA "):
+                handle_mqttdata_line(line)
+                continue
+        except (serial.SerialException, OSError) as e:
+            # Cable USB desenchufado (o la placa se reinicio y el puerto
+            # desaparecio): cerrar y volver a esperarlo.
+            print(f"[serial] se perdio la conexion con el ESP32: {e}")
+            try:
+                ser.close()
+            except Exception:
+                pass
+            ser = None
             continue
 
         # Cualquier otra línea es log normal del ESP32 (incluye el resultado de color)
@@ -501,7 +548,6 @@ def serial_reader():
 
 threading.Thread(target=serial_reader, daemon=True).start()
 
-print(f"Conectado a {PORT} a {BAUD} baudios.")
 print("La lista de comandos del firmware la imprime la propia placa al bootear")
 print("(reiniciala con RST si te la perdiste). Comandos de este script:")
 print("  sana / rota   -> modo dataset: cada foto capturada cae sola en esa carpeta")
@@ -529,7 +575,14 @@ while True:
         print("[dataset] modo apagado")
         continue
 
-    ser.write((cmd + "\n").encode())
+    if ser is None:
+        print("[serial] ESP32 desconectado, el comando no se mando")
+        continue
+    try:
+        ser.write((cmd + "\n").encode())
+    except (serial.SerialException, OSError) as e:
+        # El hilo lector se entera solo y reabre el puerto.
+        print(f"[serial] no pude mandar el comando, ESP32 desconectado: {e}")
 
 cv2.destroyAllWindows()
 mqtt_client.loop_stop()
